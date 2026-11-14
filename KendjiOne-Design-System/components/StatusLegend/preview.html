@@ -1,0 +1,13 @@
+<!-- @dsCard group="Status" height=340 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>StatusLegend</title>
+<style>body{margin:0;padding:16px;background:var(--surface-page);}</style></head>
+<body>
+<div id="root"></div>
+<script>
+  var K = window.KendjiOne, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div',{className:'k1',style:{maxWidth:'260px'}},h(K.StatusLegend,{counts:{Confirmado:4,Realizado:2,Pendente:1,Interno:3}})));
+</script>
+</body>
+</html>

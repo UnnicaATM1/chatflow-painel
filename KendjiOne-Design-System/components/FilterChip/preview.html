@@ -1,0 +1,13 @@
+<!-- @dsCard group="Filtros" height=56 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>FilterChip</title>
+<style>body{margin:0;padding:16px;background:var(--surface-page);}</style></head>
+<body>
+<div id="root"></div>
+<script>
+  var K = window.KendjiOne, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div',{className:'k1 k1-row'},h(K.FilterChip,{active:true,count:15},'Todos os setores'),h(K.FilterChip,{count:2},'A&B'),h(K.FilterChip,{count:2},'Recepção'),h(K.FilterChip,{count:6},'Atrasados'),h(K.FilterChip,{tone:'urgente',count:1},'Urgentes'),h(K.FilterChip,{tone:'alerta',count:2},'Vencem em 7 dias')));
+</script>
+</body>
+</html>

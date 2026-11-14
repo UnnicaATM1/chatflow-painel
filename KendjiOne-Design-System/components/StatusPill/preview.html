@@ -1,0 +1,13 @@
+<!-- @dsCard group="Status" height=48 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>StatusPill</title>
+<style>body{margin:0;padding:16px;background:var(--surface-page);}</style></head>
+<body>
+<div id="root"></div>
+<script>
+  var K = window.KendjiOne, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div',{className:'k1 k1-row'},h(K.StatusPill,null,'Pendente'),h(K.StatusPill,null,'Em andamento'),h(K.StatusPill,null,'Para aprovar'),h(K.StatusPill,null,'Concluída')));
+</script>
+</body>
+</html>
