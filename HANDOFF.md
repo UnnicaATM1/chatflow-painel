@@ -5,10 +5,10 @@
 <!-- STATUS_START -->
 design-system: 60%
 telas-referencia: 100%
-frontend: 0%
+frontend: 25%
 backend: 35%
 planejamento-tela-01: 100%
-geral: 22%
+geral: 30%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -33,8 +33,12 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - [ ] Após definir stack e escopo, implementar o estado vazio desktop/celular da tela 01 usando `docs/plano-tela-01.md`
 
 - [ ] Persistência real (banco) no lugar da memória e deploy da API; hoje `src/api.js` roda com dados de demonstração em memória
+- [ ] Trocar o `reservaId` (contador global, vaza o total de reservas entre lojas) por UUID ou id por loja ao entrar o banco
 - [ ] Combinar com a equipe de integração o contrato final da API e a emissão/rotação dos tokens
 - [ ] Revisar premissas 🟡 de `_reversa_sdd/prd.md` (duração 90 min, métricas, LGPD)
+
+- [ ] Front A&B/Atendimento: criar/remover ambientes e mesas, cancelar reserva, criar reserva manual, modo escuro do A&B e layout móvel (hoje só visualização, edição de mesa e campos do agente)
+- [ ] Vendorizar React (hoje vem do unpkg) para funcionar sem internet no salão
 
 ## 🧠 Aprendizados importantes
 - Design system foi montado a partir de 9 telas do Hotel Demonstração (Atendimento, Gestão, Operação, A&B) e do PDF de 10/11/2026; nada veio do código-fonte.
@@ -45,6 +49,8 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - Domínio MVP em `src/` (Node puro, memória): agentes e reservas isolados por loja, reserva idempotente por chave; testes: `node --test tests/dominio.test.js` (não passar a pasta).
 
 - API HTTP em `src/api.js` (Node puro): GET/PATCH `/lojas/:id/agente`, POST `/lojas/:id/reservas` (header Idempotency-Key), GET `/lojas/:id/mapa`; tokens Bearer por papel via env KENDJI_TOKEN_CHAT/CLIENTE/INTEGRACAO; rodar `node src/server.js`; testes `node --test tests/dominio.test.js tests/api.test.js`.
+
+- Front em `web/` servido pela própria API em `/app/` (React UMD + bundle do design system copiado; não editar a cópia sem sincronizar com `KendjiOne-Design-System/`). Login por chave (sessionStorage). Telas: Reservas, Mapa de mesas, Configuração, Agentes. Testado no navegador com Loja 1.
 
 ## 🚫 Armadilhas conhecidas
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.

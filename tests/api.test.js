@@ -70,3 +70,24 @@ test('edição e mapa só para staff, com permissão por campo', async () => {
   assert.strictEqual((await f(q, { token: T.cliente })).status, 200);
   fechar();
 });
+
+test('listagens, estrutura, edição de mesa e front estático', async () => {
+  const { f, fechar } = await subir();
+  assert.strictEqual((await f('/lojas', { token: T.chat })).status, 403);
+  assert.deepStrictEqual(await (await f('/lojas', { token: T.cliente })).json(), [{ id: 'L1', nome: 'L1' }]);
+  await f('/lojas/L1/reservas', { token: T.chat, method: 'POST', body: res, headers: { 'Idempotency-Key': 'a' } });
+  const lista = await (await f('/lojas/L1/reservas?data=2026-11-20', { token: T.cliente })).json();
+  assert.strictEqual(lista.length, 1);
+  assert.strictEqual(lista[0].mesaId, 'S1');
+  assert.strictEqual((await f('/lojas/L1/estrutura', { token: T.cliente })).status, 200);
+  const patch = (corpo, id = 'S1', token = T.cliente) => f(`/lojas/L1/mesas/${id}`, { token, method: 'PATCH', body: corpo });
+  assert.strictEqual((await patch({ capacidade: 6 })).status, 200);
+  assert.strictEqual((await patch({ capacidade: 0 })).status, 400);
+  assert.strictEqual((await patch({ reservavel: 'x' })).status, 400);
+  assert.strictEqual((await patch({ capacidade: 2 }, 'XX')).status, 404);
+  assert.strictEqual((await patch({ capacidade: 2 }, 'S1', T.chat)).status, 403);
+  assert.strictEqual((await f('/app/')).status, 200);
+  assert.strictEqual((await f('/app/app.js')).status, 200);
+  assert.strictEqual((await f('/app/..%2fsrc%2fapi.js')).status, 404);
+  fechar();
+});

@@ -2,11 +2,22 @@
 
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { lerConfig, atualizar } = require('./agentes');
+const fs = require('node:fs');
+const path = require('node:path');
+const { lerConfig, atualizar, loja } = require('./agentes');
 const { reservar } = require('./reservas');
 const { mapa } = require('./mapa');
 
 const LIMITE_CORPO = 64 * 1024;
+const WEB_DIR = path.join(__dirname, '..', 'web');
+const ESTATICOS = {
+  'index.html': 'text/html; charset=utf-8',
+  'app.js': 'text/javascript; charset=utf-8',
+  'bundle.js': 'text/javascript; charset=utf-8',
+  'bundle.css': 'text/css; charset=utf-8',
+  'tokens.css': 'text/css; charset=utf-8',
+  'logo.png': 'image/png',
+};
 
 // tokens: { chat, cliente, integracao } (strings). Papéis:
 //  chat: lê config e reserva | cliente/integracao: lê, vê mapa, edita (conforme permissão do campo)
@@ -52,15 +63,47 @@ function criarServidor(store, tokens) {
 
   return http.createServer(async (req, res) => {
     try {
+      // Front-end estático (sem dados sensíveis), lista fechada de arquivos
+      if (req.method === 'GET' && (req.url === '/app' || req.url.startsWith('/app/'))) {
+        const nome = req.url === '/app' || req.url === '/app/' ? 'index.html' : req.url.slice(5).split('?')[0];
+        const tipo = ESTATICOS[nome];
+        if (!tipo) return responder(res, 404, { erro: 'arquivo inexistente' });
+        const corpo = fs.readFileSync(path.join(WEB_DIR, nome));
+        res.writeHead(200, { 'Content-Type': tipo, 'Content-Length': corpo.length });
+        return res.end(corpo);
+      }
       const papel = autenticar(req, tokens);
       if (!papel) return responder(res, 401, { erro: 'não autenticado' });
 
       const url = new URL(req.url, 'http://x');
       const partes = url.pathname.split('/').filter(Boolean); // lojas/:id/<recurso>
+      const staff = papel === 'cliente' || papel === 'integracao';
+
+      if (partes[0] === 'lojas' && partes.length === 1 && req.method === 'GET') {
+        if (!staff) return responder(res, 403, { erro: 'sem permissão' });
+        return responder(res, 200, [...store.lojas.values()].map((l) => ({ id: l.id, nome: l.nome })));
+      }
+      // PATCH /lojas/:id/mesas/:mesaId  { capacidade?, reservavel? }
+      if (partes[0] === 'lojas' && partes[2] === 'mesas' && partes.length === 4 && req.method === 'PATCH') {
+        if (!staff) return responder(res, 403, { erro: 'sem permissão' });
+        const l = loja(store, decodeURIComponent(partes[1]));
+        const mesaId = decodeURIComponent(partes[3]);
+        const mesa = l.ambientes.flatMap((a) => a.mesas).find((m) => m.id === mesaId);
+        if (!mesa) return responder(res, 404, { erro: 'mesa inexistente' });
+        const b = await lerCorpo(req);
+        if (b.capacidade !== undefined) {
+          if (!Number.isInteger(b.capacidade) || b.capacidade < 1 || b.capacidade > 100) return responder(res, 400, { erro: 'capacidade inválida' });
+          mesa.capacidade = b.capacidade;
+        }
+        if (b.reservavel !== undefined) {
+          if (typeof b.reservavel !== 'boolean') return responder(res, 400, { erro: 'reservavel inválido' });
+          mesa.reservavel = b.reservavel;
+        }
+        return responder(res, 200, mesa);
+      }
       if (partes[0] !== 'lojas' || partes.length !== 3) return responder(res, 404, { erro: 'rota inexistente' });
       const lojaId = decodeURIComponent(partes[1]);
       const recurso = partes[2];
-      const staff = papel === 'cliente' || papel === 'integracao';
 
       if (recurso === 'agente' && req.method === 'GET') {
         return responder(res, 200, lerConfig(store, lojaId));
@@ -80,6 +123,19 @@ function criarServidor(store, tokens) {
         }
         const r = reservar(store, { lojaId, data: b.data, horario: b.horario, pessoas: b.pessoas, ambiente: b.ambiente, chave: String(chave) });
         return responder(res, r.status === 'confirmada' ? 201 : 200, r);
+      }
+      if (recurso === 'reservas' && req.method === 'GET') {
+        if (!staff) return responder(res, 403, { erro: 'sem permissão' });
+        loja(store, lojaId);
+        const data = url.searchParams.get('data');
+        return responder(res, 200, store.reservas
+          .filter((r) => r.lojaId === lojaId && (!data || r.data === data))
+          .map(({ id, mesaId, ambiente, data: d, horario, pessoas, status }) => ({ id, mesaId, ambiente, data: d, horario, pessoas, status })));
+      }
+      if (recurso === 'estrutura' && req.method === 'GET') {
+        if (!staff) return responder(res, 403, { erro: 'sem permissão' });
+        const l = loja(store, lojaId);
+        return responder(res, 200, { id: l.id, nome: l.nome, ambientes: l.ambientes });
       }
       if (recurso === 'mapa' && req.method === 'GET') {
         if (!staff) return responder(res, 403, { erro: 'sem permissão' });
