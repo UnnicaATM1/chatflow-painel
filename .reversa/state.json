@@ -1,0 +1,16 @@
+{
+  "user_name": "João",
+  "chat_language": "pt-br",
+  "doc_language": "Português",
+  "project": "Kendji ONE",
+  "output_folder": "_reversa_sdd",
+  "answer_mode": "file",
+  "newproject_progress": {
+    "mode": "expresso",
+    "stage": "done",
+    "started_at": "2026-11-14T19:00:00Z",
+    "last_checkpoint_at": "2026-11-14T19:00:00Z",
+    "completed_stages": ["ideator","researcher","drafter","spec-sdd","forward-requirements","forward-plan","forward-todo","forward-coding"],
+    "brief": "Módulo de Atendimento por agente de IA e Reservas com Mapa de mesas do Kendji ONE, 3 lojas, cada loja com agente e reservas separados"
+  }
+}
