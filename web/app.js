@@ -11,12 +11,14 @@
   function br(data) { var p = String(data).split('-'); return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : data; }
 
   function lerToken() { try { return sessionStorage.getItem('k1token') || ''; } catch (e) { return ''; } }
+  function lerOperador() { try { return sessionStorage.getItem('k1operador') || ''; } catch (e) { return ''; } }
+  function gravarOperador(n) { try { if (n) sessionStorage.setItem('k1operador', n); else sessionStorage.removeItem('k1operador'); } catch (e) { /* ignora */ } }
   function gravarToken(t) { try { if (t) sessionStorage.setItem('k1token', t); else sessionStorage.removeItem('k1token'); } catch (e) { /* ignora */ } }
 
   function api(token, metodo, caminho, corpo) {
     return fetch(caminho, {
       method: metodo,
-      headers: Object.assign({ Authorization: 'Bearer ' + token }, corpo ? { 'Content-Type': 'application/json' } : {}),
+      headers: Object.assign({ Authorization: 'Bearer ' + token }, lerOperador() ? { 'X-Operador': encodeURIComponent(lerOperador()) } : {}, corpo ? { 'Content-Type': 'application/json' } : {}),
       body: corpo ? JSON.stringify(corpo) : undefined,
     }).then(function (r) {
       return r.json().then(function (j) {
@@ -28,9 +30,11 @@
 
   function Login(p) {
     var st = useState(''), valor = st[0], setValor = st[1];
+    var sn = useState(lerOperador()), nome = sn[0], setNome = sn[1];
     var se = useState(''), erro = se[0], setErro = se[1];
     function entrar(ev) {
       ev.preventDefault();
+      gravarOperador(nome.trim());
       api(valor, 'GET', '/lojas').then(function (lojas) { gravarToken(valor); p.onEntrar(valor, lojas); })
         .catch(function (e) { setErro(e.status === 401 ? 'Chave inválida.' : e.status === 403 ? 'Esta chave não acessa o painel.' : e.message); });
     }
@@ -38,6 +42,8 @@
       h('div', { className: 'painel' },
         h('form', { className: 'k1-stack', onSubmit: entrar },
           h('h1', null, 'Entrar no ONE'),
+          h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, 'Seu nome (aparece no histórico)'),
+            h('input', { type: 'text', value: nome, maxLength: 60, autoComplete: 'off', onChange: function (e) { setNome(e.target.value); } })),
           h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, 'Chave de acesso'),
             h('input', { type: 'password', value: valor, autoComplete: 'off', onChange: function (e) { setValor(e.target.value); } })),
           erro && h('div', { className: 'erro', role: 'alert' }, erro),
@@ -262,6 +268,49 @@
       }));
   }
 
+  var ROTULO = { criada: 'Criada', editada: 'Editada', cancelada: 'Cancelada', reativada: 'Reativada', desfeita: 'Desfeita' };
+  var PAPEL = { chat: 'Chat do agente', cliente: 'Equipe da loja', integracao: 'Equipe de integração' };
+  function quandoBr(iso) {
+    var d = new Date(iso);
+    return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
+  }
+  function mudancas(e) {
+    var ks = Object.keys(e.depois || {});
+    return ks.map(function (k) { return k + ': ' + (e.antes && k in e.antes ? JSON.stringify(e.antes[k]) : '—') + ' → ' + JSON.stringify(e.depois[k]); }).join(' · ');
+  }
+
+  function Historico(p) {
+    var sl = useState(null), lista = sl[0], setLista = sl[1];
+    var se = useState(''), msg = se[0], setMsg = se[1];
+    var sr = useState(0), recarga = sr[0], setRecarga = sr[1];
+    useEffect(function () {
+      api(p.token, 'GET', '/lojas/' + encodeURIComponent(p.loja) + '/historico').then(setLista).catch(function (e) { setMsg(e.message); });
+    }, [p.loja, p.token, recarga]);
+    function desfazer(seq) {
+      api(p.token, 'POST', '/lojas/' + encodeURIComponent(p.loja) + '/historico/' + seq + '/desfazer')
+        .then(function () { setMsg('Ação desfeita e registrada.'); setRecarga(recarga + 1); })
+        .catch(function (e) { setMsg(e.status === 409 ? (e.message || 'Não foi possível desfazer.') : e.message); });
+    }
+    var desfeitos = {};
+    (lista || []).forEach(function (e) { if (e.acao === 'desfeita') desfeitos[e.refSeq] = true; });
+    return h('section', { className: 'painel k1-stack' },
+      h('h2', null, 'Histórico de modificações'),
+      h('div', { className: 'rotulo' }, 'Nada é apagado. Desfazer cria um novo registro.'),
+      msg && h('div', { role: 'status', className: /desfeita/.test(msg) ? 'rotulo' : 'erro' }, msg),
+      lista && lista.length === 0 && h(K.EmptyState, null, 'Nenhuma modificação registrada ainda.'),
+      lista && lista.length > 0 && h('table', null,
+        h('thead', null, h('tr', null, ['#', 'Quando', 'Quem', 'O quê', 'Mudança', ''].map(function (c, i) { return h('th', { key: i }, c); }))),
+        h('tbody', null, lista.map(function (e) {
+          return h('tr', { key: e.seq },
+            h('td', { className: 'mono' }, e.seq),
+            h('td', { className: 'mono' }, quandoBr(e.quando)),
+            h('td', null, (e.operador ? e.operador + ' · ' : '') + (PAPEL[e.papel] || e.papel)),
+            h('td', null, (e.entidade === 'reserva' ? 'Reserva #' + e.entidadeId : e.entidade === 'mesa' ? 'Mesa ' + e.entidadeId : 'Agente · ' + e.entidadeId) + ' · ' + (ROTULO[e.acao] || e.acao) + (e.refSeq ? ' (#' + e.refSeq + ')' : '')),
+            h('td', { className: 'mono', style: { fontSize: 12 } }, e.acao === 'criada' ? 'pessoas ' + e.depois.pessoas + ', ' + e.depois.data + ' ' + e.depois.horario + ', ' + e.depois.mesaId : mudancas(e)),
+            h('td', null, e.entidade === 'reserva' && !desfeitos[e.seq] && h(K.Button, { variant: 'secondary', onClick: function () { desfazer(e.seq); } }, 'Desfazer')));
+        }))));
+  }
+
   function App() {
     var st = useState(lerToken()), token = st[0], setToken = st[1];
     var sl = useState(null), lojas = sl[0], setLojas = sl[1];
@@ -274,14 +323,14 @@
     }, [token]);
     if (!token || !lojas) return token ? h('div', { className: 'pagina' }, h(K.EmptyState, null, 'Carregando…')) : h(Login, { onEntrar: function (t, l) { setToken(t); setLojas(l); setLoja(l[0] && l[0].id); } });
     var nome = (lojas.filter(function (l) { return l.id === loja; })[0] || {}).nome || '';
-    var tela = aba === 'Reservas' ? Reservas : aba === 'Mapa de mesas' ? Mapa : aba === 'Configuração' ? Configuracao : Agentes;
+    var tela = aba === 'Reservas' ? Reservas : aba === 'Mapa de mesas' ? Mapa : aba === 'Configuração' ? Configuracao : aba === 'Histórico' ? Historico : Agentes;
     return h('div', null,
-      h(K.TopBar, { logoSrc: '/app/logo.png', unit: nome, modules: ['Atendimento', 'Alimentos e Bebidas'], active: aba === 'Agentes' ? 'Atendimento' : 'Alimentos e Bebidas', user: 'Equipe', initials: 'EQ' }),
-      h(K.Tabs, { items: ['Reservas', 'Mapa de mesas', 'Configuração', 'Agentes'], value: aba, onChange: setAba }),
+      h(K.TopBar, { logoSrc: '/app/logo.png', unit: nome, modules: ['Atendimento', 'Alimentos e Bebidas'], active: aba === 'Agentes' ? 'Atendimento' : 'Alimentos e Bebidas', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+      h(K.Tabs, { items: ['Reservas', 'Mapa de mesas', 'Configuração', 'Agentes', 'Histórico'], value: aba, onChange: setAba }),
       h('main', { className: 'pagina' },
         h('div', { className: 'k1-row' }, h('h1', null, aba + ' · ' + nome),
           h(K.Segmented, { items: lojas.map(function (l) { return l.nome; }), value: nome, onChange: function (n) { var l = lojas.filter(function (x) { return x.nome === n; })[0]; if (l) setLoja(l.id); } }),
-          h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); setToken(''); setLojas(null); } }, 'Sair')),
+          h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setLojas(null); } }, 'Sair')),
         h(tela, { token: token, loja: loja, key: aba + loja })));
   }
 

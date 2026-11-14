@@ -5,10 +5,10 @@
 <!-- STATUS_START -->
 design-system: 60%
 telas-referencia: 100%
-frontend: 38%
-backend: 48%
+frontend: 45%
+backend: 55%
 planejamento-tela-01: 100%
-geral: 40%
+geral: 46%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -40,6 +40,9 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - [ ] Front A&B/Atendimento: criar/remover ambientes e mesas, excluir reserva em definitivo (hoje só cancela e reativa), modo escuro do A&B e layout móvel (hoje só visualização, edição de mesa e campos do agente)
 - [ ] Vendorizar React (hoje vem do unpkg) para funcionar sem internet no salão
 
+- [ ] Rastreabilidade por pessoa real: hoje o histórico guarda o papel do token (confiável) e o nome digitado no login (`X-Operador`, só um rótulo); para auditoria forte, emitir um token por usuário
+- [ ] Histórico e reservas vivem em memória; o arquivo `KENDJI_HISTORICO_ARQUIVO` (JSON por linha, horário em UTC) preserva a trilha, mas ao ir para banco migrar o histórico junto e impedir UPDATE/DELETE na tabela
+
 ## 🧠 Aprendizados importantes
 - Design system foi montado a partir de 9 telas do Hotel Demonstração (Atendimento, Gestão, Operação, A&B) e do PDF de 10/11/2026; nada veio do código-fonte.
 - Paleta: moldura navy, trabalho claro, ciano (`brand-500`) só para ação; fontes Inter (UI), JetBrains Mono (números) e Fraunces (documentos).
@@ -56,6 +59,8 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 
 - Edição de reserva: PATCH `/lojas/:id/reservas/:rid` (pessoas, data, horário, mesaId ou status confirmada/cancelada) e DELETE (cancela, libera a mesa; reserva fica na lista como Cancelada). Conflito devolve 409 com a disponibilidade. Na tela: − e + de pessoas, Editar (data, horário, pessoas e mesa), Cancelar e Reativar.
 - Testes: rodar com `node --test --test-force-exit tests/dominio.test.js tests/api.test.js`; sem a flag, uma asserção falha deixa o servidor de teste aberto e o processo trava.
+
+- Histórico de modificações (`src/historico.js`, só acrescenta): registra criação, edição, cancelamento, reativação, desfazer, edição de mesa e de campo do agente, com papel, operador, hora e antes/depois (só campos alterados). `GET /lojas/:id/historico?entidade=&id=` (equipe) e `POST /lojas/:id/historico/:seq/desfazer` (reservas). Desfazer confere campo a campo se houve mudança posterior; reenvio idempotente não gera evento duplicado. Na tela: aba Histórico, com campo "Seu nome" no login.
 
 ## 🚫 Armadilhas conhecidas
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.

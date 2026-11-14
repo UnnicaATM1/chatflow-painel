@@ -138,3 +138,60 @@ test('editar, cancelar e reativar reserva', async () => {
   assert.strictEqual((await f('/lojas/L1/reservas/999', { token: T.cliente, method: 'DELETE' })).status, 404);
   fechar();
 });
+
+test('histórico registra quem, quando, antes e depois; desfazer volta o estado', async () => {
+  const { f, fechar } = await subir();
+  const op = { 'X-Operador': encodeURIComponent('Marina Souza') };
+  const hist = async (q = '') => (await (await f('/lojas/L1/historico' + q, { token: T.cliente })).json());
+  const c = await (await f('/lojas/L1/reservas', { token: T.chat, method: 'POST', body: res, headers: { 'Idempotency-Key': 'h1' } })).json();
+  await f('/lojas/L1/reservas', { token: T.chat, method: 'POST', body: res, headers: { 'Idempotency-Key': 'h1' } }); // reenvio não duplica evento
+  const id = c.reservaId;
+  const patch = (corpo) => f(`/lojas/L1/reservas/${id}`, { token: T.cliente, method: 'PATCH', body: corpo, headers: op });
+  await patch({ pessoas: 3 });
+  await f(`/lojas/L1/reservas/${id}`, { token: T.integracao, method: 'DELETE' });
+  await patch({ status: 'confirmada' });
+  await f('/lojas/L1/mesas/S1', { token: T.cliente, method: 'PATCH', body: { capacidade: 6 }, headers: op });
+  await f('/lojas/L1/agente', { token: T.cliente, method: 'PATCH', body: { campo: 'descricao', valor: 'nova' }, headers: op });
+
+  const todos = await hist();
+  assert.deepStrictEqual(todos.map((e) => e.acao).reverse(), ['criada', 'editada', 'cancelada', 'reativada', 'editada', 'editada']);
+  assert.deepStrictEqual(todos.map((e) => e.entidade).reverse(), ['reserva', 'reserva', 'reserva', 'reserva', 'mesa', 'agente']);
+  const criada = todos[todos.length - 1];
+  assert.strictEqual(criada.papel, 'chat');
+  assert.strictEqual(criada.operador, null);
+  assert.ok(!Number.isNaN(Date.parse(criada.quando)));
+  const edit = todos.find((e) => e.entidade === 'reserva' && e.acao === 'editada');
+  assert.deepStrictEqual(edit.antes, { pessoas: 2 });
+  assert.deepStrictEqual(edit.depois, { pessoas: 3 });
+  assert.strictEqual(edit.operador, 'Marina Souza');
+  assert.strictEqual(todos.find((e) => e.acao === 'cancelada').papel, 'integracao');
+  assert.strictEqual((await hist(`?entidade=reserva&id=${id}`)).length, 4);
+
+  // chat não lê o histórico
+  assert.strictEqual((await f('/lojas/L1/historico', { token: T.chat })).status, 403);
+
+  // desfazer: conflito no mesmo campo é recusado; mudanças independentes podem ser desfeitas
+  const des = (seq) => f(`/lojas/L1/historico/${seq}/desfazer`, { token: T.cliente, method: 'POST', headers: op });
+  const seqEdit = todos.find((e) => e.entidade === 'reserva' && e.acao === 'editada').seq; // pessoas 2 -> 3
+  await patch({ pessoas: 4 });
+  assert.strictEqual((await des(seqEdit)).status, 409); // pessoas mudou depois
+  const ultima = (await hist(`?entidade=reserva&id=${id}`))[0];
+  assert.deepStrictEqual(ultima.depois, { pessoas: 4 });
+  assert.strictEqual((await des(ultima.seq)).status, 200); // volta a 3
+  assert.strictEqual((await des(seqEdit)).status, 200); // volta a 2
+  const reativ = todos.find((e) => e.acao === 'reativada');
+  assert.strictEqual((await des(reativ.seq)).status, 200); // volta a cancelada
+  assert.strictEqual((await des(reativ.seq)).status, 409); // já foi desfeito
+  const desf = (await hist(`?entidade=reserva&id=${id}`))[0];
+  assert.strictEqual(desf.acao, 'desfeita');
+  assert.strictEqual(desf.refSeq, reativ.seq);
+  assert.strictEqual(desf.operador, 'Marina Souza');
+  const lista = await (await f('/lojas/L1/reservas', { token: T.cliente })).json();
+  assert.strictEqual(lista[0].status, 'cancelada');
+  assert.strictEqual(lista[0].pessoas, 2);
+  assert.strictEqual((await des(9999)).status, 404);
+
+  // sem rota para apagar ou alterar eventos
+  assert.strictEqual((await f(`/lojas/L1/historico/${criada.seq}`, { token: T.integracao, method: 'DELETE' })).status, 404);
+  fechar();
+});
