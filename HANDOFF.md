@@ -6,9 +6,9 @@
 design-system: 60%
 telas-referencia: 100%
 frontend: 0%
-backend: 15%
+backend: 35%
 planejamento-tela-01: 100%
-geral: 18%
+geral: 22%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -24,7 +24,7 @@ Regras deste bloco, sempre seguir:
 ## 📍 Onde paramos
 TASK-001 parte 2 concluída: `docs/plano-tela-01.md` documenta layout desktop/celular, componentes existentes, estados, responsividade, passos de implementação e lacunas da tela Atendimento · Conversas.
 README, tokens, componentes/bundle e os dois prints foram lidos; sete componentes citados foram conferidos. Design system preservado.
-Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, personas, PRD, 3 specs SDD), `_reversa_forward/001-agentes-reservas/` e o domínio MVP em `src/` com 5 testes passando. Stack real e API HTTP seguem indefinidas.
+Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, personas, PRD, 3 specs SDD), `_reversa_forward/001-agentes-reservas/` e o domínio MVP em `src/` e a API HTTP em `src/api.js`, com 9 testes passando. Persistência real e deploy seguem indefinidos.
 
 ## ✅ Pendências ativas
 - [ ] Definir com o João o objetivo do projeto (app novo, protótipo ou só o design system) e a stack
@@ -32,7 +32,8 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - [ ] Validar o plano da tela 01, os breakpoints propostos e as referências ausentes de conversa preenchida, histórico móvel e apagamentos
 - [ ] Após definir stack e escopo, implementar o estado vazio desktop/celular da tela 01 usando `docs/plano-tela-01.md`
 
-- [ ] Definir stack real e expor a API HTTP (leitura de config autenticada e reserva idempotente) sobre `src/`; persistência real no lugar da memória
+- [ ] Persistência real (banco) no lugar da memória e deploy da API; hoje `src/api.js` roda com dados de demonstração em memória
+- [ ] Combinar com a equipe de integração o contrato final da API e a emissão/rotação dos tokens
 - [ ] Revisar premissas 🟡 de `_reversa_sdd/prd.md` (duração 90 min, métricas, LGPD)
 
 ## 🧠 Aprendizados importantes
@@ -42,6 +43,8 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - Logo real da TopBar está em `KendjiOne-Design-System/assets/Logos/one-lockup-dark.png`.
 
 - Domínio MVP em `src/` (Node puro, memória): agentes e reservas isolados por loja, reserva idempotente por chave; testes: `node --test tests/dominio.test.js` (não passar a pasta).
+
+- API HTTP em `src/api.js` (Node puro): GET/PATCH `/lojas/:id/agente`, POST `/lojas/:id/reservas` (header Idempotency-Key), GET `/lojas/:id/mapa`; tokens Bearer por papel via env KENDJI_TOKEN_CHAT/CLIENTE/INTEGRACAO; rodar `node src/server.js`; testes `node --test tests/dominio.test.js tests/api.test.js`.
 
 ## 🚫 Armadilhas conhecidas
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.
