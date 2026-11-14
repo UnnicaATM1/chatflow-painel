@@ -91,3 +91,50 @@ test('listagens, estrutura, edição de mesa e front estático', async () => {
   assert.strictEqual((await f('/app/..%2fsrc%2fapi.js')).status, 404);
   fechar();
 });
+
+test('disponibilidade por ambiente e reserva em mesa escolhida', async () => {
+  const { f, fechar } = await subir();
+  const q = '/lojas/L1/disponibilidade?data=2026-11-20&horario=20:00&pessoas=2';
+  const antes = await (await f(q, { token: T.chat })).json();
+  assert.deepStrictEqual(antes.ambientes, [{ ambiente: 'salao', mesas: [{ id: 'S1', capacidade: 4 }] }]);
+  const post = (mesaId, chave) => f('/lojas/L1/reservas', { token: T.chat, method: 'POST', body: { ...res, mesaId }, headers: { 'Idempotency-Key': chave } });
+  assert.strictEqual((await post('S1', 'm1')).status, 201);
+  const depois = await (await f(q, { token: T.chat })).json();
+  assert.deepStrictEqual(depois.ambientes, [{ ambiente: 'salao', mesas: [] }]);
+  const bate = await (await post('S1', 'm2')).json();
+  assert.strictEqual(bate.status, 'indisponivel');
+  assert.deepStrictEqual(bate.disponibilidade, depois.ambientes);
+  assert.strictEqual((await f('/lojas/L1/disponibilidade?data=2026-11-20&horario=20:00', { token: T.chat })).status, 400);
+  assert.strictEqual((await f(q)).status, 401);
+  fechar();
+});
+
+test('editar, cancelar e reativar reserva', async () => {
+  const { f, fechar } = await subir();
+  const post = (chave, extra = {}) => f('/lojas/L1/reservas', { token: T.chat, method: 'POST', body: { ...res, ...extra }, headers: { 'Idempotency-Key': chave } });
+  const a = await (await post('a')).json();
+  const id = a.reservaId;
+  const patch = (corpo, token = T.cliente) => f(`/lojas/L1/reservas/${id}`, { token, method: 'PATCH', body: corpo });
+  // adicionar e retirar pessoas (mesa de 4)
+  assert.strictEqual((await (await patch({ pessoas: 4 })).json()).reserva.pessoas, 4);
+  assert.strictEqual((await (await patch({ pessoas: 1 })).json()).reserva.pessoas, 1);
+  // acima da capacidade: 409 com disponibilidade
+  const estouro = await patch({ pessoas: 5 });
+  assert.strictEqual(estouro.status, 409);
+  assert.strictEqual((await estouro.json()).status, 'indisponivel');
+  assert.strictEqual((await patch({ pessoas: 0 })).status, 400);
+  // mudar horário e mesa
+  assert.strictEqual((await (await patch({ horario: '22:00' })).json()).reserva.horario, '22:00');
+  assert.strictEqual((await patch({ mesaId: 'XX' })).status, 409);
+  // permissão
+  assert.strictEqual((await patch({ pessoas: 2 }, T.chat)).status, 403);
+  // cancelar libera a mesa; cancelada não edita; reativar confere conflito
+  assert.strictEqual((await f(`/lojas/L1/reservas/${id}`, { token: T.cliente, method: 'DELETE' })).status, 200);
+  const disp = await (await f('/lojas/L1/disponibilidade?data=2026-11-20&horario=22:00&pessoas=2', { token: T.chat })).json();
+  assert.strictEqual(disp.ambientes.flatMap((x) => x.mesas).length, 1);
+  assert.strictEqual((await patch({ pessoas: 2 })).status, 409);
+  assert.strictEqual((await (await post('b', { horario: '22:00' })).json()).status, 'confirmada');
+  assert.strictEqual((await patch({ status: 'confirmada' })).status, 409);
+  assert.strictEqual((await f('/lojas/L1/reservas/999', { token: T.cliente, method: 'DELETE' })).status, 404);
+  fechar();
+});

@@ -5,10 +5,10 @@
 <!-- STATUS_START -->
 design-system: 60%
 telas-referencia: 100%
-frontend: 25%
-backend: 35%
+frontend: 38%
+backend: 48%
 planejamento-tela-01: 100%
-geral: 30%
+geral: 40%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -37,7 +37,7 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - [ ] Combinar com a equipe de integração o contrato final da API e a emissão/rotação dos tokens
 - [ ] Revisar premissas 🟡 de `_reversa_sdd/prd.md` (duração 90 min, métricas, LGPD)
 
-- [ ] Front A&B/Atendimento: criar/remover ambientes e mesas, cancelar reserva, criar reserva manual, modo escuro do A&B e layout móvel (hoje só visualização, edição de mesa e campos do agente)
+- [ ] Front A&B/Atendimento: criar/remover ambientes e mesas, excluir reserva em definitivo (hoje só cancela e reativa), modo escuro do A&B e layout móvel (hoje só visualização, edição de mesa e campos do agente)
 - [ ] Vendorizar React (hoje vem do unpkg) para funcionar sem internet no salão
 
 ## 🧠 Aprendizados importantes
@@ -51,6 +51,11 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - API HTTP em `src/api.js` (Node puro): GET/PATCH `/lojas/:id/agente`, POST `/lojas/:id/reservas` (header Idempotency-Key), GET `/lojas/:id/mapa`; tokens Bearer por papel via env KENDJI_TOKEN_CHAT/CLIENTE/INTEGRACAO; rodar `node src/server.js`; testes `node --test tests/dominio.test.js tests/api.test.js`.
 
 - Front em `web/` servido pela própria API em `/app/` (React UMD + bundle do design system copiado; não editar a cópia sem sincronizar com `KendjiOne-Design-System/`). Login por chave (sessionStorage). Telas: Reservas, Mapa de mesas, Configuração, Agentes. Testado no navegador com Loja 1.
+
+- Fluxo de reserva do agente: GET `/lojas/:id/disponibilidade?data&horario&pessoas` devolve mesas livres por ambiente (capacidade suficiente, janela de 90 min); depois POST `/lojas/:id/reservas` com `mesaId` (opcional) e Idempotency-Key. Se a mesa foi tomada, a resposta `indisponivel` já traz a disponibilidade atualizada. A tela Reservas tem "+ Nova reserva" manual com o mesmo fluxo.
+
+- Edição de reserva: PATCH `/lojas/:id/reservas/:rid` (pessoas, data, horário, mesaId ou status confirmada/cancelada) e DELETE (cancela, libera a mesa; reserva fica na lista como Cancelada). Conflito devolve 409 com a disponibilidade. Na tela: − e + de pessoas, Editar (data, horário, pessoas e mesa), Cancelar e Reativar.
+- Testes: rodar com `node --test --test-force-exit tests/dominio.test.js tests/api.test.js`; sem a flag, uma asserção falha deixa o servidor de teste aberto e o processo trava.
 
 ## 🚫 Armadilhas conhecidas
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.

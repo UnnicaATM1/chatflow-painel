@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { lerConfig, atualizar, loja } = require('./agentes');
-const { reservar } = require('./reservas');
+const { reservar, disponibilidade, editarReserva, cancelarReserva, reativarReserva, publica } = require('./reservas');
 const { mapa } = require('./mapa');
 
 const LIMITE_CORPO = 64 * 1024;
@@ -101,6 +101,18 @@ function criarServidor(store, tokens) {
         }
         return responder(res, 200, mesa);
       }
+      // PATCH /lojas/:id/reservas/:rid {pessoas?,data?,horario?,mesaId?} | {status:'cancelada'|'confirmada'}; DELETE cancela
+      if (partes[0] === 'lojas' && partes[2] === 'reservas' && partes.length === 4 && (req.method === 'PATCH' || req.method === 'DELETE')) {
+        if (!staff) return responder(res, 403, { erro: 'sem permissão' });
+        const lid = decodeURIComponent(partes[1]), rid = Number(partes[3]);
+        if (!Number.isInteger(rid)) return responder(res, 404, { erro: 'reserva inexistente' });
+        if (req.method === 'DELETE') return responder(res, 200, cancelarReserva(store, lid, rid));
+        const b = await lerCorpo(req);
+        const r = b.status === 'cancelada' ? cancelarReserva(store, lid, rid)
+          : b.status === 'confirmada' ? reativarReserva(store, lid, rid)
+            : editarReserva(store, lid, rid, { pessoas: b.pessoas, data: b.data, horario: b.horario, mesaId: b.mesaId });
+        return responder(res, r.status === 'indisponivel' ? 409 : 200, r);
+      }
       if (partes[0] !== 'lojas' || partes.length !== 3) return responder(res, 404, { erro: 'rota inexistente' });
       const lojaId = decodeURIComponent(partes[1]);
       const recurso = partes[2];
@@ -121,8 +133,18 @@ function criarServidor(store, tokens) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(b.data || '') || !/^\d{2}:\d{2}$/.test(b.horario || '')) {
           return responder(res, 400, { erro: 'data (AAAA-MM-DD) e horario (HH:MM) obrigatórios' });
         }
-        const r = reservar(store, { lojaId, data: b.data, horario: b.horario, pessoas: b.pessoas, ambiente: b.ambiente, chave: String(chave) });
+        const r = reservar(store, { lojaId, data: b.data, horario: b.horario, pessoas: b.pessoas, ambiente: b.ambiente, mesaId: b.mesaId, chave: String(chave) });
         return responder(res, r.status === 'confirmada' ? 201 : 200, r);
+      }
+      // Consulta do agente antes de reservar: mesas livres por ambiente
+      if (recurso === 'disponibilidade' && req.method === 'GET') {
+        const data = url.searchParams.get('data'), horario = url.searchParams.get('horario');
+        const pessoas = Number(url.searchParams.get('pessoas'));
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(data || '') || !/^\d{2}:\d{2}$/.test(horario || '') || !Number.isInteger(pessoas) || pessoas < 1) {
+          return responder(res, 400, { erro: 'data (AAAA-MM-DD), horario (HH:MM) e pessoas obrigatórios' });
+        }
+        const ign = Number(url.searchParams.get('ignorar'));
+        return responder(res, 200, disponibilidade(store, lojaId, data, horario, pessoas, Number.isInteger(ign) && ign > 0 ? ign : undefined));
       }
       if (recurso === 'reservas' && req.method === 'GET') {
         if (!staff) return responder(res, 403, { erro: 'sem permissão' });
@@ -130,7 +152,7 @@ function criarServidor(store, tokens) {
         const data = url.searchParams.get('data');
         return responder(res, 200, store.reservas
           .filter((r) => r.lojaId === lojaId && (!data || r.data === data))
-          .map(({ id, mesaId, ambiente, data: d, horario, pessoas, status }) => ({ id, mesaId, ambiente, data: d, horario, pessoas, status })));
+          .map(publica));
       }
       if (recurso === 'estrutura' && req.method === 'GET') {
         if (!staff) return responder(res, 403, { erro: 'sem permissão' });
