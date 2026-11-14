@@ -75,7 +75,7 @@ test('edição e mapa só para staff, com permissão por campo', async () => {
 test('listagens, estrutura, edição de mesa e front estático', async () => {
   const { f, fechar } = await subir();
   assert.strictEqual((await f('/empresas', { token: T.chat })).status, 403);
-  assert.deepStrictEqual(await (await f('/empresas', { token: T.cliente })).json(), [{ id: 'empresa_1', nome: 'empresa_1' }]);
+  assert.deepStrictEqual(await (await f('/empresas', { token: T.cliente })).json(), [{ id: 'empresa_1', nome: 'empresa_1', modulos: { reservas: true, conhecimento: true } }]);
   await f('/empresas/empresa_1/reservas', { token: T.chat, method: 'POST', body: res, headers: { 'Idempotency-Key': 'a' } });
   const lista = await (await f('/empresas/empresa_1/reservas?data=2026-11-20', { token: T.cliente })).json();
   assert.strictEqual(lista.length, 1);
@@ -242,8 +242,8 @@ test('nome do agente e renomear empresa', async () => {
   assert.strictEqual((await ren(T.cliente, 'x'.repeat(61))).status, 400);
   const ok = await ren(T.cliente, '  Cantina Central ');
   assert.strictEqual(ok.status, 200);
-  assert.deepStrictEqual(await ok.json(), { id: 'empresa_1', nome: 'Cantina Central' });
-  assert.deepStrictEqual(await (await f('/empresas', { token: T.cliente })).json(), [{ id: 'empresa_1', nome: 'Cantina Central' }]);
+  assert.deepStrictEqual(await ok.json(), { id: 'empresa_1', nome: 'Cantina Central', modulos: { reservas: true, conhecimento: true } });
+  assert.deepStrictEqual(await (await f('/empresas', { token: T.cliente })).json(), [{ id: 'empresa_1', nome: 'Cantina Central', modulos: { reservas: true, conhecimento: true } }]);
   assert.strictEqual((await f('/empresas/XX', { token: T.cliente, method: 'PATCH', body: { nome: 'a' } })).status, 404);
   const h = await (await f('/empresas/empresa_1/historico?entidade=empresa', { token: T.cliente })).json();
   assert.deepStrictEqual([h[0].antes, h[0].depois], [{ nome: 'empresa_1' }, { nome: 'Cantina Central' }]);
@@ -385,4 +385,160 @@ test('excluir empresa: bloqueio após erros de senha e desativado sem senha conf
   assert.strictEqual(r.status, 503);
   assert.strictEqual(s.empresas.size, 1);
   srv.close();
+});
+
+test('recursos por empresa: reservas e conhecimento ligam e desligam', async () => {
+  const { f, fechar } = await subir();
+  const json = (caminho, metodo, corpo, token = T.cliente) => f(caminho, { token, method: metodo, body: corpo });
+  // empresa sem mesas, só com conhecimento
+  const criada = await json('/empresas', 'POST', { nome: 'Oficina Silva', modulos: { reservas: false } });
+  assert.strictEqual(criada.status, 201);
+  const { id, modulos } = await criada.json();
+  assert.deepStrictEqual(modulos, { reservas: false, conhecimento: true });
+  assert.strictEqual((await json('/empresas', 'POST', { nome: 'Outra', modulos: { reservas: 'sim' } })).status, 400);
+  assert.strictEqual((await json('/empresas', 'POST', { nome: 'Outra2', modulos: { vendas: true } })).status, 400);
+
+  // reservas desativado: tudo que é de mesa responde 404 claro; agente e conhecimento seguem
+  const k = await (await json(`/empresas/${id}/api/chave`, 'POST', {}, T.integracao)).json();
+  for (const [metodo, caminho, corpo] of [
+    ['GET', `/empresas/${id}/disponibilidade?data=2026-11-20&horario=20:00&pessoas=2`],
+    ['GET', `/empresas/${id}/mapa?data=2026-11-20&horario=20:00`],
+    ['GET', `/empresas/${id}/reservas`],
+    ['POST', `/empresas/${id}/reservas`, { data: '2026-11-20', horario: '20:00', pessoas: 2 }],
+    ['POST', `/empresas/${id}/ambientes`, { nome: 'Salão' }],
+    ['POST', `/empresas/${id}/mesas`, { ambiente: 'Salão', capacidade: 4 }],
+  ]) {
+    const r = await f(caminho, { token: metodo === 'GET' && caminho.includes('disponibilidade') ? k.chave : T.cliente, method: metodo, body: corpo, headers: { 'Idempotency-Key': 'z' } });
+    assert.strictEqual(r.status, 404, `${metodo} ${caminho}`);
+    assert.match((await r.json()).erro, /não habilitado/);
+  }
+  assert.strictEqual((await f(`/empresas/${id}/agente`, { token: k.chave })).status, 200);
+
+  // /recursos diz ao sistema de conversa o que existe
+  const rec = await (await f(`/empresas/${id}/recursos`, { token: k.chave })).json();
+  assert.deepStrictEqual([rec.reservas, rec.conhecimento], [false, true]);
+  assert.ok(rec.endpoints.some((e) => e.caminho === `/empresas/${id}/conhecimento`));
+  assert.ok(!rec.endpoints.some((e) => e.caminho.includes('disponibilidade')));
+
+  // ligar e desligar pela equipe (chat não pode); dados preservados
+  assert.strictEqual((await json(`/empresas/${id}/modulos`, 'PATCH', { reservas: true }, T.chat)).status, 403);
+  assert.strictEqual((await json(`/empresas/${id}/modulos`, 'PATCH', {})).status, 400);
+  assert.strictEqual((await json(`/empresas/${id}/modulos`, 'PATCH', { reservas: 1 })).status, 400);
+  assert.deepStrictEqual(await (await json(`/empresas/${id}/modulos`, 'PATCH', { reservas: true })).json(), { reservas: true, conhecimento: true });
+  assert.strictEqual((await json(`/empresas/${id}/ambientes`, 'POST', { nome: 'Salão' })).status, 201);
+  await json(`/empresas/${id}/modulos`, 'PATCH', { conhecimento: false });
+  assert.strictEqual((await f(`/empresas/${id}/conhecimento`, { token: k.chave })).status, 404);
+  assert.deepStrictEqual((await (await f('/empresas', { token: T.cliente })).json()).find((e) => e.id === id).modulos, { reservas: true, conhecimento: false });
+  const est = await (await f(`/empresas/${id}/estrutura`, { token: T.cliente })).json();
+  assert.strictEqual(est.ambientes.length, 1); // dados mantidos
+  const h = await (await f(`/empresas/${id}/historico?entidade=empresa`, { token: T.cliente })).json();
+  assert.ok(h.some((e) => e.depois.modulo_conhecimento === false && e.antes.modulo_conhecimento === true));
+  fechar();
+});
+
+test('conhecimento: texto, tabela e documento lidos pelo chat', async () => {
+  const { f, fechar } = await subir();
+  const json = (caminho, metodo, corpo, token = T.cliente) => f(caminho, { token, method: metodo, body: corpo, headers: { 'X-Operador': encodeURIComponent('Marina') } });
+  const k = await (await json('/empresas/empresa_1/api/chave', 'POST', {}, T.integracao)).json();
+  const base = '/empresas/empresa_1/conhecimento';
+  assert.deepStrictEqual(await (await f(base, { token: k.chave })).json(), { itens: [] });
+
+  // texto
+  const tx = await json(base, 'POST', { tipo: 'texto', titulo: 'Horário de funcionamento', texto: 'Segunda a sábado, das 8h às 18h.' });
+  assert.strictEqual(tx.status, 201);
+  const txt = await tx.json();
+  assert.strictEqual(txt.texto, 'Segunda a sábado, das 8h às 18h.');
+
+  // tabela de preços
+  const tb = await json(base, 'POST', { tipo: 'tabela', titulo: 'Tabela de preços', tabela: { colunas: ['Serviço', 'Preço'], linhas: [['Revisão', 'R$ 250,00'], ['Troca de óleo', 120]] } });
+  assert.strictEqual(tb.status, 201);
+  const tabela = await tb.json();
+  assert.deepStrictEqual(tabela.tabela.linhas[1], ['Troca de óleo', '120']);
+
+  // documentos: texto é extraído; pdf fica como arquivo
+  const b64 = (s) => Buffer.from(s).toString('base64');
+  const dt = await (await json(base, 'POST', { tipo: 'documento', titulo: 'Regras', arquivo: { nome: 'regras.txt', base64: b64('Não aceitamos cheque.') } })).json();
+  assert.strictEqual(dt.texto, 'Não aceitamos cheque.');
+  assert.strictEqual(dt.arquivo.nome, 'regras.txt');
+  const pdfBytes = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from('conteudo binario')]);
+  const dp = await (await json(base, 'POST', { tipo: 'documento', titulo: 'Catálogo', arquivo: { nome: 'C:\\pasta\\catalogo.PDF', base64: pdfBytes.toString('base64') } })).json();
+  assert.strictEqual(dp.arquivo.nome, 'catalogo.PDF');
+  assert.strictEqual(dp.texto, undefined);
+
+  // o chat lê tudo de uma vez e baixa o arquivo, com cabeçalhos seguros
+  const lista = (await (await f(base, { token: k.chave })).json()).itens;
+  assert.deepStrictEqual(lista.map((i) => i.tipo), ['texto', 'tabela', 'documento', 'documento']);
+  const dl = await f(`${base}/${dp.id}/arquivo`, { token: k.chave });
+  assert.strictEqual(dl.status, 200);
+  assert.strictEqual(dl.headers.get('content-type'), 'application/pdf');
+  assert.match(dl.headers.get('content-disposition'), /^attachment; filename\*=UTF-8''catalogo\.PDF$/);
+  assert.strictEqual(dl.headers.get('x-content-type-options'), 'nosniff');
+  assert.deepStrictEqual(Buffer.from(await dl.arrayBuffer()), pdfBytes);
+  assert.strictEqual((await f(`${base}/${txt.id}/arquivo`, { token: k.chave })).status, 404); // item sem arquivo
+  assert.strictEqual((await f(`${base}/${tabela.id}`, { token: k.chave }).then((r) => r.json())).titulo, 'Tabela de preços');
+
+  // permissões: chat só lê; outra empresa não alcança
+  assert.strictEqual((await json(base, 'POST', { tipo: 'texto', titulo: 'x', texto: 'y' }, k.chave)).status, 403);
+  assert.strictEqual((await json(`${base}/${txt.id}`, 'DELETE', undefined, k.chave)).status, 403);
+  assert.strictEqual((await f('/empresas/empresa_2/conhecimento', { token: k.chave })).status, 403);
+  assert.strictEqual((await f(base)).status, 401);
+
+  // validações
+  const ruim = async (corpo) => (await json(base, 'POST', corpo)).status;
+  assert.strictEqual(await ruim({ tipo: 'video', titulo: 'x' }), 400);
+  assert.strictEqual(await ruim({ tipo: 'texto', titulo: '  ', texto: 'a' }), 400);
+  assert.strictEqual(await ruim({ tipo: 'texto', titulo: 'x'.repeat(121), texto: 'a' }), 400);
+  assert.strictEqual(await ruim({ tipo: 'texto', titulo: 'x', texto: 'a'.repeat(50001) }), 400);
+  assert.strictEqual(await ruim({ tipo: 'tabela', titulo: 'x', tabela: { colunas: [], linhas: [] } }), 400);
+  assert.strictEqual(await ruim({ tipo: 'tabela', titulo: 'x', tabela: { colunas: ['a', 'b'], linhas: [['1']] } }), 400);
+  assert.strictEqual(await ruim({ tipo: 'tabela', titulo: 'x', tabela: { colunas: ['a'], linhas: [['y'.repeat(501)]] } }), 400);
+  assert.strictEqual(await ruim({ tipo: 'tabela', titulo: 'x', tabela: { colunas: Array(21).fill('c'), linhas: [] } }), 400);
+  assert.strictEqual(await ruim({ tipo: 'documento', titulo: 'x', arquivo: { nome: 'pagina.html', base64: b64('<script>1</script>') } }), 400);
+  assert.strictEqual(await ruim({ tipo: 'documento', titulo: 'x', arquivo: { nome: 'imagem.svg', base64: b64('<svg/>') } }), 400);
+  assert.strictEqual(await ruim({ tipo: 'documento', titulo: 'x', arquivo: { nome: 'falso.pdf', base64: b64('isto não é pdf') } }), 400);
+  assert.strictEqual(await ruim({ tipo: 'documento', titulo: 'x', arquivo: { nome: 'binario.txt', base64: Buffer.from([65, 0, 66, 67, 68, 69]).toString('base64') } }), 400);
+  assert.strictEqual(await ruim({ tipo: 'documento', titulo: 'x', arquivo: { nome: 'a.txt', base64: 'não é base64!' } }), 400);
+  assert.strictEqual(await ruim({ tipo: 'documento', titulo: 'x', arquivo: { nome: 'a.txt', base64: '' } }), 400);
+  const grande = Buffer.alloc(4 * 1024 * 1024 + 1, 0x41).toString('base64');
+  assert.strictEqual(await ruim({ tipo: 'documento', titulo: 'x', arquivo: { nome: 'grande.txt', base64: grande } }), 400);
+  assert.strictEqual((await json(`${base}/999`, 'PATCH', { titulo: 'x' })).status, 404);
+
+  // editar: parcial, tipo fixo, substituir arquivo
+  const ed = await (await json(`${base}/${tabela.id}`, 'PATCH', { titulo: 'Preços 2026', tabela: { colunas: ['Serviço', 'Preço'], linhas: [['Revisão', 'R$ 280,00']] } })).json();
+  assert.deepStrictEqual([ed.titulo, ed.tabela.linhas.length], ['Preços 2026', 1]);
+  assert.strictEqual((await json(`${base}/${tabela.id}`, 'PATCH', { tipo: 'texto' })).status, 400);
+  assert.strictEqual((await json(`${base}/${tabela.id}`, 'PATCH', {})).status, 400);
+  assert.strictEqual((await json(`${base}/${tabela.id}`, 'PATCH', { texto: 'x' })).status, 400); // campo de outro tipo não conta
+  const troca = await (await json(`${base}/${dt.id}`, 'PATCH', { arquivo: { nome: 'regras2.pdf', base64: pdfBytes.toString('base64') } })).json();
+  assert.strictEqual(troca.texto, undefined); // pdf não tem texto extraído: o do arquivo antigo foi limpo
+  assert.strictEqual(troca.arquivo.nome, 'regras2.pdf');
+
+  // excluir
+  assert.strictEqual((await json(`${base}/${txt.id}`, 'DELETE')).status, 200);
+  assert.strictEqual((await f(`${base}/${txt.id}`, { token: k.chave })).status, 404);
+  assert.strictEqual((await (await f(base, { token: k.chave })).json()).itens.length, 3);
+
+  // histórico: quem mexeu, antes e depois, e nenhum byte de arquivo
+  const h = await (await f('/empresas/empresa_1/historico?entidade=conhecimento', { token: T.cliente })).json();
+  assert.deepStrictEqual(h.map((e) => e.acao).reverse(), ['criada', 'criada', 'criada', 'criada', 'editada', 'editada', 'excluida']);
+  assert.strictEqual(h[0].antes.titulo, 'Horário de funcionamento');
+  assert.strictEqual(h[0].operador, 'Marina');
+  const antigo = h.find((e) => e.acao === 'editada' && e.depois.tabela);
+  assert.strictEqual(antigo.antes.tabela.linhas.length, 2);
+  assert.ok(!JSON.stringify(h).includes(pdfBytes.toString('base64')));
+  // a exclusão de item não aparece como exclusão de empresa
+  assert.deepStrictEqual(await (await f('/historico/excluidas', { token: T.cliente })).json(), []);
+  fechar();
+});
+
+test('excluir empresa guarda o conhecimento no instantâneo (sem arquivos)', async () => {
+  const { f, fechar } = await subir();
+  const post = (caminho, corpo) => f(caminho, { token: T.cliente, method: 'POST', body: corpo });
+  await post('/empresas/empresa_1/conhecimento', { tipo: 'documento', titulo: 'Doc', arquivo: { nome: 'a.pdf', base64: Buffer.from('%PDF-1.4 x').toString('base64') } });
+  await post('/empresas/empresa_1/conhecimento', { tipo: 'texto', titulo: 'T', texto: 'conteúdo' });
+  const r = await post('/empresas/empresa_1/excluir', { senha: 'senha-de-teste', confirmarNome: 'empresa_1' });
+  assert.strictEqual(r.status, 200);
+  const ev = (await (await f('/historico/excluidas', { token: T.cliente })).json())[0];
+  assert.strictEqual(ev.nome, 'empresa_1');
+  fechar();
 });

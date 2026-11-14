@@ -292,6 +292,26 @@
           h(K.Button, { variant: 'ghost', onClick: fechar }, 'Cancelar'))));
   }
 
+  function RecursosEmpresa(p) {
+    var sm = useState(''), msg = sm[0], setMsg = sm[1];
+    function mudar(chave, valor) {
+      var corpo = {}; corpo[chave] = valor;
+      api(p.token, 'PATCH', '/empresas/' + encodeURIComponent(p.empresa) + '/modulos', corpo)
+        .then(function () { setMsg('Salvo.'); p.aoMudar(); }).catch(function (e) { setMsg(e.message); });
+    }
+    function opcao(chave, titulo, desc) {
+      return h('label', { key: chave, className: 'k1-row', style: { alignItems: 'flex-start', gap: 10, flexWrap: 'nowrap' } },
+        h('input', { type: 'checkbox', checked: p.modulos[chave] !== false, style: { marginTop: 4 }, onChange: function (e) { mudar(chave, e.target.checked); } }),
+        h('span', null, h('b', null, titulo), h('br'), h('span', { style: { color: 'var(--ink-muted)', fontSize: 13 } }, desc)));
+    }
+    return h('div', { className: 'k1-stack', style: { borderBottom: '1px solid var(--border)', paddingBottom: 16 } },
+      h('div', { className: 'rotulo' }, 'Recursos desta empresa'),
+      opcao('reservas', 'Reservas e mapa de mesas', 'Para negócios com mesas. Desligado, somem as abas Reservas e Mapa de mesas e a API deixa de oferecer disponibilidade e reservas.'),
+      opcao('conhecimento', 'Base de conhecimento', 'Tabelas de preços, textos e documentos que o sistema de conversa lê pela API.'),
+      h('div', { style: { color: 'var(--ink-muted)', fontSize: 12 } }, 'Desligar um recurso não apaga nada: os dados ficam guardados e voltam quando ele for ligado de novo.'),
+      msg && h('div', { className: msg === 'Salvo.' ? 'rotulo' : 'erro', role: 'status' }, msg));
+  }
+
   function Configuracao(p) {
     var s = useState(null), est = s[0], setEst = s[1];
     var se = useState(''), erro = se[0], setErro = se[1];
@@ -299,17 +319,19 @@
       api(p.token, 'GET', '/empresas/' + encodeURIComponent(p.empresa) + '/estrutura').then(setEst).catch(function (e) { setErro(e.message); });
     }, [p.empresa, p.token]);
     useEffect(function () { setEst(null); carregar(); }, [carregar]);
+    var reservasOn = !!est && !(est.modulos && est.modulos.reservas === false);
     return h('section', { className: 'painel k1-stack' },
-      h('h2', null, 'Configuração · Empresa → Ambiente → Mesa'),
+      h('h2', null, 'Configuração · ' + (est && !reservasOn ? 'Empresa' : 'Empresa → Ambiente → Mesa')),
       est && h(NomeEmpresa, { key: est.nome, nome: est.nome, token: p.token, empresa: p.empresa, aoRenomear: p.aoRenomear }),
+      est && h(RecursosEmpresa, { modulos: est.modulos || {}, token: p.token, empresa: p.empresa, aoMudar: function () { carregar(); p.aoRenomear(); } }),
       erro && h('div', { className: 'erro', role: 'alert' }, erro),
-      est && est.ambientes.length === 0 && h(K.EmptyState, null, 'Nenhum ambiente cadastrado. Crie o primeiro abaixo para poder cadastrar mesas e receber reservas.'),
-      est && est.ambientes.map(function (a) {
+      reservasOn && est.ambientes.length === 0 && h(K.EmptyState, null, 'Nenhum ambiente cadastrado. Crie o primeiro abaixo para poder cadastrar mesas e receber reservas.'),
+      reservasOn && est.ambientes.map(function (a) {
         return h('div', { key: a.nome }, h('div', { className: 'rotulo', style: { margin: '8px 0 4px' } }, a.nome),
           a.mesas.map(function (m) { return h(LinhaMesa, { key: m.id + m.capacidade + m.reservavel, mesa: m, token: p.token, empresa: p.empresa, recarregar: carregar }); }),
           h(NovaMesa, { key: 'nova-' + a.nome + a.mesas.length, ambiente: a.nome, token: p.token, empresa: p.empresa, recarregar: carregar }));
       }),
-      est && h(NovoAmbiente, { token: p.token, empresa: p.empresa, recarregar: carregar }),
+      reservasOn && h(NovoAmbiente, { token: p.token, empresa: p.empresa, recarregar: carregar }),
       est && h(ExcluirEmpresa, { key: 'ex-' + p.empresa, nome: est.nome, token: p.token, empresa: p.empresa, aoExcluir: p.aoExcluir }));
   }
 
@@ -389,7 +411,7 @@
 
   var ROTULO = { criada: 'Criada', editada: 'Editada', cancelada: 'Cancelada', reativada: 'Reativada', desfeita: 'Desfeita', chave_gerada: 'Chave gerada', chave_revogada: 'Chave revogada', excluida: 'Excluída', exclusao_negada: 'Exclusão negada' };
   function objeto(e) {
-    return e.entidade === 'reserva' ? 'Reserva #' + e.entidadeId : e.entidade === 'mesa' ? 'Mesa ' + e.entidadeId : e.entidade === 'empresa' ? 'Empresa' : e.entidade === 'ambiente' ? 'Ambiente ' + e.entidadeId : e.entidade === 'api' ? 'Chave da API' : e.entidade === 'empresa' ? 'Empresa' : 'Agente · ' + e.entidadeId;
+    return e.entidade === 'reserva' ? 'Reserva #' + e.entidadeId : e.entidade === 'mesa' ? 'Mesa ' + e.entidadeId : e.entidade === 'empresa' ? 'Empresa' : e.entidade === 'conhecimento' ? 'Conhecimento #' + e.entidadeId : e.entidade === 'ambiente' ? 'Ambiente ' + e.entidadeId : e.entidade === 'api' ? 'Chave da API' : e.entidade === 'empresa' ? 'Empresa' : 'Agente · ' + e.entidadeId;
   }
   var PAPEL = { chat: 'Chat do agente', cliente: 'Equipe da empresa', integracao: 'Equipe de integração' };
   function quandoBr(iso) {
@@ -431,7 +453,7 @@
             h('td', { className: 'mono' }, quandoBr(e.quando)),
             h('td', null, (e.operador ? e.operador + ' · ' : '') + (PAPEL[e.papel] || e.papel)),
             h('td', null, objeto(e) + ' · ' + (ROTULO[e.acao] || e.acao) + (e.refSeq ? ' (#' + e.refSeq + ')' : '')),
-            h('td', { className: 'mono', style: { fontSize: 12 } }, e.acao === 'criada' && e.entidade === 'reserva' ? 'pessoas ' + e.depois.pessoas + ', ' + e.depois.data + ' ' + e.depois.horario + ', ' + e.depois.mesaId : mudancas(e)),
+            h('td', { className: 'mono', style: { fontSize: 12 } }, e.acao === 'excluida' && e.entidade === 'conhecimento' ? 'removido: ' + e.antes.titulo : e.acao === 'criada' && e.entidade === 'reserva' ? 'pessoas ' + e.depois.pessoas + ', ' + e.depois.data + ' ' + e.depois.horario + ', ' + e.depois.mesaId : mudancas(e)),
             h('td', null, e.entidade === 'reserva' && !desfeitos[e.seq] && h(K.Button, { variant: 'secondary', onClick: function () { desfazer(e.seq); } }, 'Desfazer')));
         }))),
       excluidas.length > 0 && h('div', { className: 'k1-stack', style: { borderTop: '1px solid var(--border)', paddingTop: 16 } },
@@ -444,6 +466,171 @@
               h('td', null, (x.operador ? x.operador + ' · ' : '') + (PAPEL[x.papel] || x.papel)), h('td', null, x.nome),
               h('td', { className: 'mono', style: { fontSize: 12 } }, x.ambientes + ' ambiente(s), ' + x.mesas + ' mesa(s), ' + x.reservas + ' reserva(s)'));
           })))));
+  }
+
+  var TIPO_ROTULO = { texto: 'Texto', tabela: 'Tabela', documento: 'Documento' };
+  var EXT_OK = ['txt', 'md', 'csv', 'pdf', 'docx', 'xlsx'];
+
+  function paraBase64(buf) {
+    var bin = '', bytes = new Uint8Array(buf), passo = 0x8000;
+    for (var i = 0; i < bytes.length; i += passo) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + passo));
+    return btoa(bin);
+  }
+  function tamanhoBr(n) { return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1).replace('.', ',') + ' KB' : (n / 1048576).toFixed(1).replace('.', ',') + ' MB'; }
+  function baixar(token, caminho, nome, aoErro) {
+    fetch(caminho, { headers: { Authorization: 'Bearer ' + token } })
+      .then(function (r) { if (!r.ok) throw new Error('Não foi possível baixar (' + r.status + ').'); return r.blob(); })
+      .then(function (b) { var u = URL.createObjectURL(b), a = document.createElement('a'); a.href = u; a.download = nome; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1000); })
+      .catch(function (e) { aoErro(e.message); });
+  }
+  // Planilha colada (Excel/Sheets usam TAB; CSV usa ; ou ,): a primeira linha vira os nomes das colunas.
+  function lerPlanilha(txt) {
+    var linhas = txt.replace(/\r/g, '').split('\n').filter(function (l) { return l.trim() !== ''; });
+    if (!linhas.length) return null;
+    var sep = linhas[0].indexOf('\t') >= 0 ? '\t' : linhas[0].indexOf(';') >= 0 ? ';' : ',';
+    var m = linhas.map(function (l) { return l.split(sep).map(function (c) { return c.trim(); }); });
+    var n = m[0].length;
+    return { colunas: m[0], linhas: m.slice(1).map(function (l) { var r = l.slice(0, n); while (r.length < n) r.push(''); return r; }) };
+  }
+
+  function EditorConhecimento(p) {
+    var item = p.item, tipo = item ? item.tipo : p.tipo;
+    var st = useState(item ? item.titulo : ''), titulo = st[0], setTitulo = st[1];
+    var sx = useState(item && tipo === 'texto' ? item.texto : ''), texto = sx[0], setTexto = sx[1];
+    var sb = useState(item && item.tabela ? { colunas: item.tabela.colunas.slice(), linhas: item.tabela.linhas.map(function (r) { return r.slice(); }) } : { colunas: ['Item', 'Preço'], linhas: [['', '']] }), tab = sb[0], setTab = sb[1];
+    var sa = useState(null), arq = sa[0], setArq = sa[1];
+    var sc = useState(''), colar = sc[0], setColar = sc[1];
+    var sm = useState(''), msg = sm[0], setMsg = sm[1];
+    var sg = useState(false), gravando = sg[0], setGravando = sg[1];
+    var base = '/empresas/' + encodeURIComponent(p.empresa) + '/conhecimento';
+    var passou = (tipo === 'texto' && contar(texto) > 50000) || contar(titulo) > 120;
+
+    function setCelula(i, j, v) { var l = tab.linhas.map(function (r) { return r.slice(); }); l[i][j] = v; setTab({ colunas: tab.colunas, linhas: l }); }
+    function setColuna(j, v) { var c = tab.colunas.slice(); c[j] = v; setTab({ colunas: c, linhas: tab.linhas }); }
+    function addLinha() { setTab({ colunas: tab.colunas, linhas: tab.linhas.concat([tab.colunas.map(function () { return ''; })]) }); }
+    function delLinha(i) { setTab({ colunas: tab.colunas, linhas: tab.linhas.filter(function (_, k) { return k !== i; }) }); }
+    function addColuna() { setTab({ colunas: tab.colunas.concat(['Coluna ' + (tab.colunas.length + 1)]), linhas: tab.linhas.map(function (r) { return r.concat(['']); }) }); }
+    function delColuna(j) { setTab({ colunas: tab.colunas.filter(function (_, k) { return k !== j; }), linhas: tab.linhas.map(function (r) { return r.filter(function (_, k) { return k !== j; }); }) }); }
+    function aplicarColar() {
+      var r = lerPlanilha(colar);
+      if (!r) { setMsg('Cole as células da planilha (a primeira linha vira os nomes das colunas).'); return; }
+      setTab(r); setColar(''); setMsg('');
+    }
+    function escolher(ev) {
+      var f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      var ext = (f.name.indexOf('.') >= 0 ? f.name.split('.').pop() : '').toLowerCase();
+      if (EXT_OK.indexOf(ext) < 0) { setMsg('Tipo não permitido. Use ' + EXT_OK.join(', ') + '.'); ev.target.value = ''; return; }
+      if (f.size > 4 * 1024 * 1024) { setMsg('O arquivo passa de 4 MB.'); ev.target.value = ''; return; }
+      var fr = new FileReader();
+      fr.onload = function () { setArq({ nome: f.name, base64: paraBase64(fr.result), tamanho: f.size }); setMsg(''); };
+      fr.onerror = function () { setMsg('Não foi possível ler o arquivo.'); };
+      fr.readAsArrayBuffer(f);
+    }
+    function salvar() {
+      var corpo = item ? {} : { tipo: tipo };
+      if (!item || titulo.trim() !== item.titulo) corpo.titulo = titulo.trim();
+      if (tipo === 'texto' && (!item || texto !== item.texto)) corpo.texto = texto;
+      if (tipo === 'tabela' && (!item || JSON.stringify(tab) !== JSON.stringify(item.tabela))) corpo.tabela = tab;
+      if (tipo === 'documento' && arq) corpo.arquivo = { nome: arq.nome, base64: arq.base64 };
+      if (tipo === 'documento' && !item && !arq) { setMsg('Escolha o arquivo do documento.'); return; }
+      if (item && Object.keys(corpo).length === 0) { setMsg('Nada foi alterado.'); return; }
+      setGravando(true);
+      api(p.token, item ? 'PATCH' : 'POST', item ? base + '/' + item.id : base, corpo)
+        .then(function () { p.aoSalvar(); })
+        .catch(function (e) { setMsg(e.message); setGravando(false); });
+    }
+
+    return h('div', { className: 'item k1-stack' },
+      h('div', { className: 'rotulo' }, (item ? 'Editar ' : 'Novo ') + TIPO_ROTULO[tipo].toLowerCase()),
+      h('label', { className: 'campo' },
+        h('div', { className: 'k1-row', style: { justifyContent: 'space-between' } }, h('span', { className: 'rotulo' }, 'Título'), h('span', { className: 'mono', style: { fontSize: 12, color: contar(titulo) > 120 ? 'var(--danger)' : 'var(--ink-muted)' } }, contar(titulo) + ' / 120')),
+        h('input', { type: 'text', value: titulo, placeholder: tipo === 'tabela' ? 'Ex.: Tabela de preços' : 'Ex.: Horário de funcionamento', 'aria-label': 'Título', onChange: function (e) { setTitulo(e.target.value); setMsg(''); } })),
+      tipo === 'texto' && h('div', { className: 'campo' },
+        h('div', { className: 'k1-row', style: { justifyContent: 'space-between' } }, h('span', { className: 'rotulo' }, 'Texto'), h('span', { className: 'mono', style: { fontSize: 12, color: contar(texto) > 50000 ? 'var(--danger)' : 'var(--ink-muted)' } }, contar(texto).toLocaleString('pt-BR') + ' / 50.000')),
+        h(CaixaTexto, { value: texto, rotulo: 'Texto', onChange: function (v) { setTexto(v); setMsg(''); } })),
+      tipo === 'tabela' && h('div', { className: 'k1-stack' },
+        h('div', { className: 'grade-edicao' }, h('table', null,
+          h('thead', null, h('tr', null, tab.colunas.map(function (c, j) {
+            return h('th', { key: j }, h('div', { className: 'k1-row', style: { flexWrap: 'nowrap', gap: 4 } },
+              h('input', { type: 'text', value: c, 'aria-label': 'Nome da coluna ' + (j + 1), onChange: function (e) { setColuna(j, e.target.value); } }),
+              h(K.Button, { variant: 'ghost', disabled: tab.colunas.length <= 1, 'aria-label': 'Remover coluna ' + (j + 1), onClick: function () { delColuna(j); } }, '×')));
+          }).concat([h('th', { key: 'acao' })]))),
+          h('tbody', null, tab.linhas.map(function (l, i) {
+            return h('tr', { key: i }, l.map(function (c, j) { return h('td', { key: j }, h('input', { type: 'text', value: c, 'aria-label': 'Linha ' + (i + 1) + ', ' + (tab.colunas[j] || 'coluna ' + (j + 1)), onChange: function (e) { setCelula(i, j, e.target.value); } })); })
+              .concat([h('td', { key: 'acao' }, h(K.Button, { variant: 'ghost', 'aria-label': 'Remover linha ' + (i + 1), onClick: function () { delLinha(i); } }, '×'))]));
+          })))),
+        h('div', { className: 'k1-row' }, h(K.Button, { variant: 'secondary', onClick: addLinha }, '+ Linha'), h(K.Button, { variant: 'secondary', onClick: addColuna, disabled: tab.colunas.length >= 20 }, '+ Coluna'),
+          h('span', { className: 'rotulo' }, tab.linhas.length + ' linha(s) · ' + tab.colunas.length + ' coluna(s)')),
+        h('details', null, h('summary', { style: { cursor: 'pointer', fontSize: 13 } }, 'Colar de uma planilha (Excel, Google Planilhas ou CSV)'),
+          h('div', { className: 'k1-stack', style: { marginTop: 8 } },
+            h('textarea', { value: colar, rows: 4, 'aria-label': 'Colar planilha', placeholder: 'Cole aqui. A primeira linha vira os nomes das colunas.', style: { width: '100%', boxSizing: 'border-box', font: '400 13px/20px var(--font-mono)', padding: 8, border: '1px solid var(--border-strong)', borderRadius: 6, background: 'var(--surface-card)', color: 'var(--ink)' }, onChange: function (e) { setColar(e.target.value); } }),
+            h('div', null, h(K.Button, { variant: 'secondary', disabled: !colar.trim(), onClick: aplicarColar }, 'Aplicar (substitui a tabela)'))))),
+      tipo === 'documento' && h('div', { className: 'k1-stack' },
+        item && item.arquivo && !arq && h('div', null, 'Arquivo atual: ', h('b', null, item.arquivo.nome), ' · ' + tamanhoBr(item.arquivo.tamanho) + (item.texto !== undefined ? ' · o texto é lido pelo sistema de conversa' : ' · o sistema de conversa recebe o link para baixar')),
+        arq && h('div', null, 'Novo arquivo: ', h('b', null, arq.nome), ' · ' + tamanhoBr(arq.tamanho)),
+        h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, item ? 'Substituir arquivo (opcional)' : 'Arquivo'),
+          h('input', { type: 'file', accept: '.txt,.md,.csv,.pdf,.docx,.xlsx', 'aria-label': 'Arquivo do documento', onChange: escolher })),
+        h('div', { style: { color: 'var(--ink-muted)', fontSize: 12 } }, 'Até 4 MB. Arquivos .txt, .md e .csv têm o texto lido direto pela API. PDF, Word e Excel ficam disponíveis para download.')),
+      msg && h('div', { className: 'erro', role: 'alert' }, msg),
+      h('div', { className: 'k1-row' },
+        h(K.Button, { disabled: gravando || passou || !titulo.trim(), onClick: salvar }, gravando ? 'Salvando…' : 'Salvar'),
+        h(K.Button, { variant: 'ghost', onClick: p.aoCancelar }, 'Cancelar')));
+  }
+
+  function ItemConhecimento(p) {
+    var it = p.item;
+    var sa = useState(false), confirmar = sa[0], setConfirmar = sa[1];
+    var sm = useState(''), msg = sm[0], setMsg = sm[1];
+    function excluir() {
+      api(p.token, 'DELETE', '/empresas/' + encodeURIComponent(p.empresa) + '/conhecimento/' + it.id).then(p.aoMudar).catch(function (e) { setMsg(e.message); });
+    }
+    return h('div', { className: 'item k1-stack' },
+      h('div', { className: 'k1-row', style: { justifyContent: 'space-between' } },
+        h('div', { className: 'k1-row' }, h('b', null, it.titulo), h('span', { className: 'k1-pill k1-pill-pendente' }, TIPO_ROTULO[it.tipo]),
+          h('span', { className: 'rotulo' }, 'atualizado em ' + new Date(it.atualizadoEm).toLocaleString('pt-BR'))),
+        h('div', { className: 'k1-row' },
+          h(K.Button, { variant: 'secondary', onClick: p.aoEditar }, 'Editar'),
+          !confirmar && h(K.Button, { variant: 'danger', onClick: function () { setConfirmar(true); } }, 'Excluir'),
+          confirmar && h(K.Button, { variant: 'danger', onClick: excluir }, 'Confirmar exclusão'),
+          confirmar && h(K.Button, { variant: 'ghost', onClick: function () { setConfirmar(false); } }, 'Cancelar'))),
+      it.tipo === 'texto' && h('div', { style: { whiteSpace: 'pre-wrap', color: 'var(--ink-muted)', fontSize: 13 } }, it.texto.length > 300 ? it.texto.slice(0, 300) + '…' : it.texto),
+      it.tipo === 'tabela' && h('div', { className: 'grade-edicao' }, h('table', null,
+        h('thead', null, h('tr', null, it.tabela.colunas.map(function (c, j) { return h('th', { key: j }, c); }))),
+        h('tbody', null, it.tabela.linhas.slice(0, 8).map(function (l, i) { return h('tr', { key: i }, l.map(function (c, j) { return h('td', { key: j }, c); })); })))),
+      it.tipo === 'tabela' && it.tabela.linhas.length > 8 && h('div', { className: 'rotulo' }, '… e mais ' + (it.tabela.linhas.length - 8) + ' linha(s)'),
+      it.tipo === 'documento' && h('div', { className: 'k1-stack' },
+        h('div', { className: 'k1-row' }, h('span', null, it.arquivo.nome + ' · ' + tamanhoBr(it.arquivo.tamanho)),
+          h(K.Button, { variant: 'secondary', onClick: function () { baixar(p.token, it.arquivo.url, it.arquivo.nome, setMsg); } }, 'Baixar')),
+        it.texto !== undefined && h('div', { style: { whiteSpace: 'pre-wrap', color: 'var(--ink-muted)', fontSize: 13 } }, it.texto.length > 300 ? it.texto.slice(0, 300) + '…' : it.texto)),
+      msg && h('div', { className: 'erro', role: 'alert' }, msg));
+  }
+
+  function Conhecimento(p) {
+    var si = useState(null), itens = si[0], setItens = si[1];
+    var se = useState(''), erro = se[0], setErro = se[1];
+    var sd = useState(null), editando = sd[0], setEditando = sd[1]; // { tipo } novo | { item } edição
+    var sr = useState(0), recarga = sr[0], setRecarga = sr[1];
+    useEffect(function () {
+      api(p.token, 'GET', '/empresas/' + encodeURIComponent(p.empresa) + '/conhecimento').then(function (r) { setErro(''); setItens(r.itens); })
+        .catch(function (e) { setErro(e.message); });
+    }, [p.empresa, p.token, recarga]);
+    function depois() { setEditando(null); setRecarga(recarga + 1); }
+    return h('section', { className: 'painel k1-stack' },
+      h('h2', null, 'Base de conhecimento'),
+      h('div', { className: 'rotulo' }, 'O sistema de conversa lê tudo isto de uma vez pela API: GET /empresas/' + p.empresa + '/conhecimento'),
+      h('div', { className: 'k1-row' },
+        h(K.Button, { variant: 'secondary', onClick: function () { setEditando({ tipo: 'texto' }); } }, '+ Novo texto'),
+        h(K.Button, { variant: 'secondary', onClick: function () { setEditando({ tipo: 'tabela' }); } }, '+ Nova tabela'),
+        h(K.Button, { variant: 'secondary', onClick: function () { setEditando({ tipo: 'documento' }); } }, '+ Novo documento')),
+      erro && h('div', { className: 'erro', role: 'alert' }, erro),
+      editando && editando.tipo && h(EditorConhecimento, { key: 'novo-' + editando.tipo, tipo: editando.tipo, token: p.token, empresa: p.empresa, aoSalvar: depois, aoCancelar: function () { setEditando(null); } }),
+      itens && itens.length === 0 && !editando && h(K.EmptyState, null, 'Nada cadastrado ainda. Adicione uma tabela de preços, um texto ou um documento para o agente consultar.'),
+      itens && itens.map(function (it) {
+        return editando && editando.item && editando.item.id === it.id
+          ? h(EditorConhecimento, { key: 'ed-' + it.id, item: it, token: p.token, empresa: p.empresa, aoSalvar: depois, aoCancelar: function () { setEditando(null); } })
+          : h(ItemConhecimento, { key: it.id + it.atualizadoEm, item: it, token: p.token, empresa: p.empresa, aoMudar: depois, aoEditar: function () { setEditando({ item: it }); } });
+      }));
   }
 
   function Resultado(p) {
@@ -489,28 +676,46 @@
         return r.text().then(function (txt) { var j = null; try { j = JSON.parse(txt); } catch (e) { /* texto puro */ } return { status: r.status, json: j, ms: Math.round(performance.now() - t0) }; });
       }).catch(function () { return { status: 0, json: null, ms: Math.round(performance.now() - t0) }; });
     }
+    var atual = ((p.empresas || []).filter(function (x) { return x.id === p.empresa; })[0]) || {};
+    var mod = atual.modulos || { reservas: true, conhecimento: true };
     function testar() {
       var chave = chaveTeste.trim();
       var outra = (p.empresas || []).filter(function (l) { return l.id !== p.empresa; })[0];
       var hoje = new Date(), d = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0') + '-' + String(hoje.getDate()).padStart(2, '0');
+      var id = encodeURIComponent(p.empresa);
+      var chamadas = { agente: chamar('/empresas/' + id + '/agente', chave) };
+      if (mod.reservas) chamadas.disp = chamar('/empresas/' + id + '/disponibilidade?data=' + d + '&horario=20:00&pessoas=2', chave);
+      if (mod.conhecimento) chamadas.conh = chamar('/empresas/' + id + '/conhecimento', chave);
+      chamadas.outra = outra ? chamar('/empresas/' + encodeURIComponent(outra.id) + '/agente', chave) : Promise.resolve(null);
+      chamadas.semChave = chamar('/empresas/' + id + '/agente', '');
+      var chaves = Object.keys(chamadas);
       setTestes(null); setAmostra(null);
-      Promise.all([
-        chamar('/empresas/' + encodeURIComponent(p.empresa) + '/agente', chave),
-        chamar('/empresas/' + encodeURIComponent(p.empresa) + '/disponibilidade?data=' + d + '&horario=20:00&pessoas=2', chave),
-        outra ? chamar('/empresas/' + encodeURIComponent(outra.id) + '/agente', chave) : Promise.resolve(null),
-        chamar('/empresas/' + encodeURIComponent(p.empresa) + '/agente', ''),
-      ]).then(function (r) {
+      Promise.all(chaves.map(function (k) { return chamadas[k]; })).then(function (lista) {
+        var r = {}; chaves.forEach(function (k, i) { r[k] = lista[i]; });
         var linhas = [
-          { ok: r[0].status === 200, titulo: 'Ler a configuração do agente desta empresa', status: r[0].status, ms: r[0].ms, detalhe: r[0].status === 200 ? 'Recebeu o bloco completo, com nome do agente.' : r[0].status === 401 ? 'Chave inválida, revogada ou de outra empresa.' : 'Resposta inesperada.' },
-          { ok: r[1].status === 200, titulo: 'Consultar disponibilidade de mesas (hoje 20:00, 2 pessoas)', status: r[1].status, ms: r[1].ms, detalhe: r[1].status === 200 ? 'Mesas livres devolvidas por ambiente.' : 'Falhou.' },
+          { ok: r.agente.status === 200, titulo: 'Ler a configuração do agente desta empresa', status: r.agente.status, ms: r.agente.ms, detalhe: r.agente.status === 200 ? 'Recebeu o bloco completo, com nome do agente.' : r.agente.status === 401 ? 'Chave inválida, revogada ou de outra empresa.' : 'Resposta inesperada.' },
         ];
-        if (r[2]) linhas.push({ ok: r[2].status === 403, titulo: 'Isolamento: a chave NÃO pode acessar outra empresa', status: r[2].status, ms: r[2].ms, detalhe: r[2].status === 403 ? 'Bloqueado, como esperado.' : 'ATENÇÃO: acesso indevido a outra empresa.' });
-        linhas.push({ ok: r[3].status === 401, titulo: 'Sem chave, o acesso é negado', status: r[3].status, ms: r[3].ms, detalhe: r[3].status === 401 ? 'Bloqueado, como esperado.' : 'ATENÇÃO: acesso sem chave.' });
+        if (r.disp) linhas.push({ ok: r.disp.status === 200, titulo: 'Consultar disponibilidade de mesas (hoje 20:00, 2 pessoas)', status: r.disp.status, ms: r.disp.ms, detalhe: r.disp.status === 200 ? 'Mesas livres devolvidas por ambiente.' : 'Falhou.' });
+        if (r.conh) linhas.push({ ok: r.conh.status === 200, titulo: 'Ler a base de conhecimento (textos, tabelas e documentos)', status: r.conh.status, ms: r.conh.ms, detalhe: r.conh.status === 200 && r.conh.json ? r.conh.json.itens.length + ' item(ns) recebido(s).' : 'Falhou.' });
+        if (r.outra) linhas.push({ ok: r.outra.status === 403, titulo: 'Isolamento: a chave NÃO pode acessar outra empresa', status: r.outra.status, ms: r.outra.ms, detalhe: r.outra.status === 403 ? 'Bloqueado, como esperado.' : 'ATENÇÃO: acesso indevido a outra empresa.' });
+        linhas.push({ ok: r.semChave.status === 401, titulo: 'Sem chave, o acesso é negado', status: r.semChave.status, ms: r.semChave.ms, detalhe: r.semChave.status === 401 ? 'Bloqueado, como esperado.' : 'ATENÇÃO: acesso sem chave.' });
         setTestes(linhas);
-        setAmostra({ agente: r[0].json, disponibilidade: r[1].json });
+        setAmostra({ agente: r.agente.json, disponibilidade: r.disp && r.disp.json, conhecimento: r.conh && r.conh.json });
       });
     }
 
+    var linhasEnd = [
+      ['GET', base + '/agente', 'Lê o nome, a descrição, a personalidade, as habilidades, os produtos e as restrições do agente'],
+      ['GET', base + '/recursos', 'Diz quais recursos esta empresa usa e quais endereços estão disponíveis'],
+    ];
+    if (mod.reservas) {
+      linhasEnd.push(['GET', base + '/disponibilidade?data=AAAA-MM-DD&horario=HH:MM&pessoas=N', 'Devolve as mesas livres por ambiente']);
+      linhasEnd.push(['POST', base + '/reservas', 'Registra a reserva (JSON com data, horario, pessoas, mesaId; cabeçalho Idempotency-Key)']);
+    }
+    if (mod.conhecimento) {
+      linhasEnd.push(['GET', base + '/conhecimento', 'Lê todos os textos, tabelas (colunas e linhas) e documentos da base de conhecimento']);
+      linhasEnd.push(['GET', base + '/conhecimento/ID_DO_ITEM/arquivo', 'Baixa o arquivo de um documento (o endereço vem no campo arquivo.url)']);
+    }
     var exemplo = 'curl -H "Authorization: Bearer SUA_CHAVE" "' + base + '/agente"';
     return h('section', { className: 'painel k1-stack' },
       h('h2', null, 'API · conexão com o sistema de conversa'),
@@ -530,11 +735,7 @@
 
       h('div', { className: 'k1-stack', style: { borderTop: '1px solid var(--border)', paddingTop: 16 } },
         h('h2', null, 'Endereços desta empresa'),
-        h('table', null, h('tbody', null, [
-          ['GET', base + '/agente', 'Lê o nome, a descrição, a personalidade, as habilidades, os produtos e as restrições do agente'],
-          ['GET', base + '/disponibilidade?data=AAAA-MM-DD&horario=HH:MM&pessoas=N', 'Devolve as mesas livres por ambiente'],
-          ['POST', base + '/reservas', 'Registra a reserva (JSON com data, horario, pessoas, mesaId; cabeçalho Idempotency-Key)'],
-        ].map(function (l) { return h('tr', { key: l[1] }, h('td', { className: 'mono' }, l[0]), h('td', { className: 'mono', style: { wordBreak: 'break-all' } }, l[1]), h('td', { style: { color: 'var(--ink-muted)' } }, l[2])); }))),
+        h('table', null, h('tbody', null, linhasEnd.map(function (l) { return h('tr', { key: l[1] }, h('td', { className: 'mono' }, l[0]), h('td', { className: 'mono', style: { wordBreak: 'break-all' } }, l[1]), h('td', { style: { color: 'var(--ink-muted)' } }, l[2])); }))),
         h('div', { className: 'k1-row' }, h('code', { className: 'mono', style: { fontSize: 12, wordBreak: 'break-all' } }, exemplo), h(K.Button, { variant: 'secondary', onClick: function () { copiar(exemplo); } }, 'Copiar exemplo'))),
 
       h('div', { className: 'k1-stack', style: { borderTop: '1px solid var(--border)', paddingTop: 16 } },
@@ -552,21 +753,28 @@
           h('pre', { className: 'mono', style: { fontSize: 12, background: 'var(--surface-sunken)', padding: 12, borderRadius: 8, maxHeight: 280, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0 } }, JSON.stringify(amostra.agente, null, 2))),
         amostra && amostra.disponibilidade && h('div', { className: 'k1-stack' },
           h('div', { className: 'rotulo' }, 'O que ele recebe ao consultar a disponibilidade'),
-          h('pre', { className: 'mono', style: { fontSize: 12, background: 'var(--surface-sunken)', padding: 12, borderRadius: 8, maxHeight: 220, overflow: 'auto', margin: 0 } }, JSON.stringify(amostra.disponibilidade, null, 2)))));
+          h('pre', { className: 'mono', style: { fontSize: 12, background: 'var(--surface-sunken)', padding: 12, borderRadius: 8, maxHeight: 220, overflow: 'auto', margin: 0 } }, JSON.stringify(amostra.disponibilidade, null, 2))),
+        amostra && amostra.conhecimento && h('div', { className: 'k1-stack' },
+          h('div', { className: 'rotulo' }, 'O que ele recebe ao ler a base de conhecimento'),
+          h('pre', { className: 'mono', style: { fontSize: 12, background: 'var(--surface-sunken)', padding: 12, borderRadius: 8, maxHeight: 280, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0 } }, JSON.stringify(amostra.conhecimento, null, 2)))));
   }
 
   function NovaEmpresa(p) {
     var sa = useState(false), aberto = sa[0], setAberto = sa[1];
     var sv = useState(''), v = sv[0], setV = sv[1];
+    var sr = useState(true), reservas = sr[0], setReservas = sr[1];
+    var sk = useState(true), conh = sk[0], setConh = sk[1];
     var sm = useState(''), msg = sm[0], setMsg = sm[1];
     function criar(ev) {
       ev.preventDefault();
-      api(p.token, 'POST', '/empresas', { nome: v }).then(function (l) { setV(''); setMsg(''); setAberto(false); p.aoCriar(l.id); })
+      api(p.token, 'POST', '/empresas', { nome: v, modulos: { reservas: reservas, conhecimento: conh } }).then(function (l) { setV(''); setMsg(''); setAberto(false); p.aoCriar(l.id); })
         .catch(function (e) { setMsg(e.message); });
     }
     if (!aberto) return h(K.Button, { variant: 'secondary', onClick: function () { setAberto(true); } }, '+ Nova empresa');
     return h('form', { className: 'k1-row', onSubmit: criar },
       h('input', { type: 'text', value: v, maxLength: 60, autoFocus: true, placeholder: 'Nome da empresa', 'aria-label': 'Nome da nova empresa', onChange: function (e) { setV(e.target.value); setMsg(''); } }),
+      h('label', { className: 'k1-row', style: { gap: 4, fontSize: 13 } }, h('input', { type: 'checkbox', checked: reservas, onChange: function (e) { setReservas(e.target.checked); } }), 'Reservas e mapa de mesas'),
+      h('label', { className: 'k1-row', style: { gap: 4, fontSize: 13 } }, h('input', { type: 'checkbox', checked: conh, onChange: function (e) { setConh(e.target.checked); } }), 'Base de conhecimento'),
       h(K.Button, { type: 'submit', disabled: !v.trim() }, 'Criar'),
       h(K.Button, { variant: 'ghost', onClick: function () { setAberto(false); setMsg(''); } }, 'Cancelar'),
       msg && h('span', { className: 'erro', role: 'alert' }, msg));
@@ -596,16 +804,19 @@
             h(NovaEmpresa, { token: token, aoCriar: function (id) { api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(id); setAba('Configuração'); }); } }),
             h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); } }, 'Sair'))));
     }
-    var tela = aba === 'Reservas' ? Reservas : aba === 'Mapa de mesas' ? Mapa : aba === 'Configuração' ? Configuracao : aba === 'Histórico' ? Historico : aba === 'API' ? ApiEmpresa : Agentes;
+    var modAtual = (empresas.filter(function (l) { return l.id === empresa; })[0] || {}).modulos || { reservas: true, conhecimento: true };
+    var abas = [].concat(modAtual.reservas ? ['Reservas', 'Mapa de mesas'] : [], ['Configuração', 'Agentes'], modAtual.conhecimento ? ['Conhecimento'] : [], ['API', 'Histórico']);
+    var abaAtual = abas.indexOf(aba) >= 0 ? aba : abas[0];
+    var tela = abaAtual === 'Reservas' ? Reservas : abaAtual === 'Mapa de mesas' ? Mapa : abaAtual === 'Configuração' ? Configuracao : abaAtual === 'Histórico' ? Historico : abaAtual === 'API' ? ApiEmpresa : abaAtual === 'Conhecimento' ? Conhecimento : Agentes;
     return h('div', null,
-      h(K.TopBar, { logoSrc: '/app/logo.png', unit: nome, modules: ['Atendimento', 'Alimentos e Bebidas'], active: aba === 'Agentes' ? 'Atendimento' : 'Alimentos e Bebidas', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
-      h(K.Tabs, { items: ['Reservas', 'Mapa de mesas', 'Configuração', 'Agentes', 'API', 'Histórico'], value: aba, onChange: setAba }),
+      h(K.TopBar, { logoSrc: '/app/logo.png', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Alimentos e Bebidas'] : ['Atendimento'], active: modAtual.reservas && ['Reservas', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Alimentos e Bebidas' : 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+      h(K.Tabs, { items: abas, value: abaAtual, onChange: setAba }),
       h('main', { className: 'pagina' },
-        h('div', { className: 'k1-row' }, h('h1', null, aba + ' · ' + nome),
+        h('div', { className: 'k1-row' }, h('h1', null, abaAtual + ' · ' + nome),
           h('div', { style: { maxWidth: '100%', overflowX: 'auto' } }, h(K.Segmented, { items: empresas.map(function (l) { return l.nome; }), value: nome, onChange: function (n) { var l = empresas.filter(function (x) { return x.nome === n; })[0]; if (l) setEmpresa(l.id); } })),
           h(NovaEmpresa, { token: token, aoCriar: function (id) { api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(id); setAba('Configuração'); }); } }),
           h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); } }, 'Sair')),
-        h(tela, { token: token, empresa: empresa, empresas: empresas, aoRenomear: recarregarEmpresas, aoExcluir: aposExcluir, key: aba + empresa })));
+        h(tela, { token: token, empresa: empresa, empresas: empresas, aoRenomear: recarregarEmpresas, aoExcluir: aposExcluir, key: abaAtual + empresa })));
   }
 
   ReactDOM.createRoot(document.getElementById('root')).render(h(App));

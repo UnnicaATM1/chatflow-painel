@@ -9,8 +9,10 @@ const { reservar, disponibilidade, editarReserva, cancelarReserva, reativarReser
 const { registrar, diff, listar } = require('./historico');
 const { addEmpresa } = require('./store');
 const { mapa } = require('./mapa');
+const conhecimento = require('./conhecimento');
 
 const LIMITE_CORPO = 512 * 1024; // 5 campos de texto somam até ~49 mil caracteres
+const LIMITE_CORPO_ARQUIVO = 6 * 1024 * 1024; // documento de até 4 MB em base64
 const WEB_DIR = path.join(__dirname, '..', 'web');
 const ESTATICOS = {
   'index.html': 'text/html; charset=utf-8',
@@ -44,13 +46,13 @@ function autenticar(req, tokens, store) {
   return null;
 }
 
-function lerCorpo(req) {
+function lerCorpo(req, limite = LIMITE_CORPO) {
   return new Promise((resolve, reject) => {
     let tam = 0;
     const partes = [];
     req.on('data', (c) => {
       tam += c.length;
-      if (tam > LIMITE_CORPO) { reject(Object.assign(new Error('corpo grande demais'), { codigo: 413 })); req.destroy(); return; }
+      if (tam > limite) { reject(Object.assign(new Error('corpo grande demais'), { codigo: 413 })); req.destroy(); return; }
       partes.push(c);
     });
     req.on('end', () => {
@@ -123,6 +125,28 @@ function validarNome(store, bruto, ignorarId) {
   return { nome };
 }
 
+const MODULOS = ['reservas', 'conhecimento'];
+const RECURSOS_RESERVAS = ['reservas', 'disponibilidade', 'mapa', 'ambientes', 'mesas'];
+
+// true se a empresa usa o recurso (ou se ela nem existe: o handler seguinte responde 404)
+function moduloLigado(store, id, nome) {
+  const e = store.empresas.get(id);
+  return !e || e.modulos[nome] !== false;
+}
+
+// Lê e valida { reservas?: boolean, conhecimento?: boolean }
+function validarModulos(b) {
+  const out = {};
+  if (b === undefined) return { modulos: out };
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return { erro: 'modulos inválido' };
+  for (const k of Object.keys(b)) {
+    if (!MODULOS.includes(k)) return { erro: `módulo desconhecido: ${k}` };
+    if (typeof b[k] !== 'boolean') return { erro: `módulo ${k} deve ser verdadeiro ou falso` };
+    out[k] = b[k];
+  }
+  return { modulos: out };
+}
+
 // opcoes.adminSenha: senha do administrador (vem de KENDJI_ADMIN_SENHA). Sem ela, excluir empresa fica desativado.
 function criarServidor(store, tokens, opcoes = {}) {
   if (!tokens || !Object.values(tokens).some(Boolean)) throw new Error('nenhum token configurado');
@@ -154,7 +178,7 @@ function criarServidor(store, tokens, opcoes = {}) {
       // GET /historico/excluidas: resumo das empresas excluídas (o instantâneo completo fica gravado no histórico)
       if (partes[0] === 'historico' && partes[1] === 'excluidas' && partes.length === 2 && req.method === 'GET') {
         if (!staff) return responder(res, 403, { erro: 'sem permissão' });
-        return responder(res, 200, store.historico.filter((e) => e.acao === 'excluida').reverse().map((e) => ({
+        return responder(res, 200, store.historico.filter((e) => e.acao === 'excluida' && e.entidade === 'empresa').reverse().map((e) => ({
           seq: e.seq, quando: e.quando, papel: e.papel, operador: e.operador, empresaId: e.empresaId, nome: e.antes.nome,
           reservas: e.antes.reservas.length, ambientes: e.antes.ambientes.length, mesas: e.antes.ambientes.reduce((n, a) => n + a.mesas.length, 0),
         })));
@@ -165,15 +189,17 @@ function criarServidor(store, tokens, opcoes = {}) {
         const b = await lerCorpo(req);
         const v = validarNome(store, b.nome);
         if (v.erro) return responder(res, v.codigo, { erro: v.erro });
+        const vm = validarModulos(b.modulos);
+        if (vm.erro) return responder(res, 400, { erro: vm.erro });
         let n = store.empresas.size + 1;
         while (store.empresas.has(`empresa_${n}`) || store.historico.some((e) => e.empresaId === `empresa_${n}`)) n++;
         const id = `empresa_${n}`;
         addEmpresa(store, {
-          id, nome: v.nome, ambientes: [],
+          id, nome: v.nome, ambientes: [], modulos: vm.modulos,
           agente: { nome: '', descricao: '', personalidade: '', habilidades: '', produtos: '', restricoes: '', editavelPor: Object.fromEntries(PERMISSAO_PADRAO.map((c) => [c, ['cliente', 'integracao']])) },
         });
         registrar(store, { empresaId: id, entidade: 'empresa', entidadeId: id, acao: 'criada', ...quem(req, papel), depois: { nome: v.nome } });
-        return responder(res, 201, { id, nome: v.nome });
+        return responder(res, 201, { id, nome: v.nome, modulos: store.empresas.get(id).modulos });
       }
       // Chave de API da empresa (só equipe de integração). A chave aparece uma única vez, ao gerar; só o hash fica guardado.
       if (partes[0] === 'empresas' && partes[2] === 'api' && (partes.length === 3 || (partes.length === 4 && partes[3] === 'chave'))) {
@@ -198,7 +224,7 @@ function criarServidor(store, tokens, opcoes = {}) {
 
       if (partes[0] === 'empresas' && partes.length === 1 && req.method === 'GET') {
         if (!staff) return responder(res, 403, { erro: 'sem permissão' });
-        return responder(res, 200, [...store.empresas.values()].map((l) => ({ id: l.id, nome: l.nome })));
+        return responder(res, 200, [...store.empresas.values()].map((l) => ({ id: l.id, nome: l.nome, modulos: { ...l.modulos } })));
       }
       // PATCH /empresas/:id  { nome }  (renomear a empresa)
       if (partes[0] === 'empresas' && partes.length === 2 && req.method === 'PATCH') {
@@ -212,12 +238,13 @@ function criarServidor(store, tokens, opcoes = {}) {
         l.nome = nome;
         const dl = diff({ nome: antes }, { nome });
         if (Object.keys(dl.depois).length) registrar(store, { empresaId: l.id, entidade: 'empresa', entidadeId: l.id, acao: 'editada', ...quem(req, papel), ...dl });
-        return responder(res, 200, { id: l.id, nome: l.nome });
+        return responder(res, 200, { id: l.id, nome: l.nome, modulos: { ...l.modulos } });
       }
       // PATCH /empresas/:id/mesas/:mesaId  { capacidade?, reservavel? }
       if (partes[0] === 'empresas' && partes[2] === 'mesas' && partes.length === 4 && req.method === 'PATCH') {
         if (!staff) return responder(res, 403, { erro: 'sem permissão' });
         const l = empresa(store, decodeURIComponent(partes[1]));
+        if (!moduloLigado(store, l.id, 'reservas')) return responder(res, 404, { erro: 'recurso "reservas" não habilitado para esta empresa' });
         const mesaId = decodeURIComponent(partes[3]);
         const mesa = l.ambientes.flatMap((a) => a.mesas).find((m) => m.id === mesaId);
         if (!mesa) return responder(res, 404, { erro: 'mesa inexistente' });
@@ -239,6 +266,7 @@ function criarServidor(store, tokens, opcoes = {}) {
       if (partes[0] === 'empresas' && partes[2] === 'reservas' && partes.length === 4 && (req.method === 'PATCH' || req.method === 'DELETE')) {
         if (!staff) return responder(res, 403, { erro: 'sem permissão' });
         const lid = decodeURIComponent(partes[1]), rid = Number(partes[3]);
+        if (!moduloLigado(store, lid, 'reservas')) return responder(res, 404, { erro: 'recurso "reservas" não habilitado para esta empresa' });
         if (!Number.isInteger(rid)) return responder(res, 404, { erro: 'reserva inexistente' });
         const ator = quem(req, papel);
         if (req.method === 'DELETE') return responder(res, 200, mudarReserva(store, lid, rid, () => cancelarReserva(store, lid, rid), ator));
@@ -256,9 +284,84 @@ function criarServidor(store, tokens, opcoes = {}) {
         const r = desfazer(store, decodeURIComponent(partes[1]), seq, quem(req, papel));
         return responder(res, r.status === 'indisponivel' ? 409 : 200, r);
       }
+      // Base de conhecimento: GET (chat e equipe) lê; POST/PATCH/DELETE (equipe) editam.
+      //  /empresas/:id/conhecimento | /conhecimento/:itemId | /conhecimento/:itemId/arquivo
+      if (partes[0] === 'empresas' && partes[2] === 'conhecimento' && partes.length >= 3 && partes.length <= 5) {
+        const eid = decodeURIComponent(partes[1]);
+        const e = empresa(store, eid);
+        if (e.modulos.conhecimento === false) return responder(res, 404, { erro: 'recurso "conhecimento" não habilitado para esta empresa' });
+        const ator = quem(req, papel);
+        if (partes.length === 3 && req.method === 'GET') return responder(res, 200, { itens: conhecimento.listarPublico(store, eid) });
+        if (partes.length === 3 && req.method === 'POST') {
+          if (!staff) return responder(res, 403, { erro: 'sem permissão' });
+          const item = conhecimento.criar(store, eid, await lerCorpo(req, LIMITE_CORPO_ARQUIVO));
+          registrar(store, { empresaId: eid, entidade: 'conhecimento', entidadeId: item.id, acao: 'criada', ...ator, depois: conhecimento.resumo(item) });
+          return responder(res, 201, conhecimento.publica(eid, item));
+        }
+        const itemId = Number(partes[3]);
+        if (!Number.isInteger(itemId)) return responder(res, 404, { erro: 'item de conhecimento inexistente' });
+        if (partes.length === 4 && req.method === 'GET') return responder(res, 200, conhecimento.obter(store, eid, itemId));
+        if (partes.length === 4 && req.method === 'PATCH') {
+          if (!staff) return responder(res, 403, { erro: 'sem permissão' });
+          const antes = conhecimento.resumo(conhecimento.achar(store, eid, itemId).item);
+          const item = conhecimento.editar(store, eid, itemId, await lerCorpo(req, LIMITE_CORPO_ARQUIVO));
+          const d = diff(antes, conhecimento.resumo(item));
+          if (Object.keys(d.depois).length) registrar(store, { empresaId: eid, entidade: 'conhecimento', entidadeId: itemId, acao: 'editada', ...ator, ...d });
+          return responder(res, 200, conhecimento.publica(eid, item));
+        }
+        if (partes.length === 4 && req.method === 'DELETE') {
+          if (!staff) return responder(res, 403, { erro: 'sem permissão' });
+          const item = conhecimento.excluir(store, eid, itemId);
+          registrar(store, { empresaId: eid, entidade: 'conhecimento', entidadeId: itemId, acao: 'excluida', ...ator, antes: conhecimento.resumo(item), depois: {} });
+          return responder(res, 200, { excluido: true, id: itemId });
+        }
+        if (partes.length === 5 && partes[4] === 'arquivo' && req.method === 'GET') {
+          const a = conhecimento.arquivoDe(store, eid, itemId);
+          res.writeHead(200, {
+            'Content-Type': a.mime,
+            'Content-Length': a.buffer.length,
+            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(a.nome)}`,
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': 'sandbox',
+          });
+          return res.end(a.buffer);
+        }
+      }
       if (partes[0] !== 'empresas' || partes.length !== 3) return responder(res, 404, { erro: 'rota inexistente' });
       const empresaId = decodeURIComponent(partes[1]);
       const recurso = partes[2];
+      if (RECURSOS_RESERVAS.includes(recurso) && !moduloLigado(store, empresaId, 'reservas')) {
+        return responder(res, 404, { erro: 'recurso "reservas" não habilitado para esta empresa' });
+      }
+
+      // GET /empresas/:id/recursos: o que esta empresa usa e quais endereços o sistema de conversa pode chamar
+      if (recurso === 'recursos' && req.method === 'GET') {
+        const e = empresa(store, empresaId);
+        const base = `/empresas/${e.id}`;
+        const endpoints = [{ metodo: 'GET', caminho: `${base}/agente`, descricao: 'configuração do agente' }];
+        if (e.modulos.reservas) {
+          endpoints.push({ metodo: 'GET', caminho: `${base}/disponibilidade?data=AAAA-MM-DD&horario=HH:MM&pessoas=N`, descricao: 'mesas livres por ambiente' });
+          endpoints.push({ metodo: 'POST', caminho: `${base}/reservas`, descricao: 'registrar reserva (cabeçalho Idempotency-Key)' });
+        }
+        if (e.modulos.conhecimento) {
+          endpoints.push({ metodo: 'GET', caminho: `${base}/conhecimento`, descricao: 'todos os itens de conhecimento (textos, tabelas, documentos)' });
+          endpoints.push({ metodo: 'GET', caminho: `${base}/conhecimento/:itemId`, descricao: 'um item' });
+        }
+        return responder(res, 200, { empresa: e.nome, reservas: e.modulos.reservas, conhecimento: e.modulos.conhecimento, endpoints });
+      }
+      // PATCH /empresas/:id/modulos { reservas?, conhecimento? }: liga ou desliga recursos (os dados são mantidos)
+      if (recurso === 'modulos' && req.method === 'PATCH') {
+        if (!staff) return responder(res, 403, { erro: 'sem permissão' });
+        const e = empresa(store, empresaId);
+        const vm = validarModulos(await lerCorpo(req));
+        if (vm.erro) return responder(res, 400, { erro: vm.erro });
+        if (Object.keys(vm.modulos).length === 0) return responder(res, 400, { erro: 'nenhum módulo informado' });
+        const antes = Object.fromEntries(MODULOS.map((m) => [`modulo_${m}`, e.modulos[m]]));
+        Object.assign(e.modulos, vm.modulos);
+        const d = diff(antes, Object.fromEntries(MODULOS.map((m) => [`modulo_${m}`, e.modulos[m]])));
+        if (Object.keys(d.depois).length) registrar(store, { empresaId: e.id, entidade: 'empresa', entidadeId: e.id, acao: 'editada', ...quem(req, papel), ...d });
+        return responder(res, 200, { ...e.modulos });
+      }
 
       if (recurso === 'agente' && req.method === 'GET') {
         return responder(res, 200, lerConfig(store, empresaId));
@@ -335,7 +438,8 @@ function criarServidor(store, tokens, opcoes = {}) {
         tent.n = 0;
         if (b.confirmarNome !== l.nome) return responder(res, 400, { erro: 'digite o nome exato da empresa para confirmar' });
         const instantaneo = {
-          nome: l.nome, agente: lerConfig(store, l.id), ambientes: l.ambientes, chaveApiAtiva: !!l.chave,
+          nome: l.nome, agente: lerConfig(store, l.id), ambientes: l.ambientes, chaveApiAtiva: !!l.chave, modulos: { ...l.modulos },
+          conhecimento: l.conhecimento.map(conhecimento.resumo),
           reservas: store.reservas.filter((r) => r.empresaId === l.id).map(publica),
         };
         store.empresas.delete(l.id);
@@ -376,7 +480,7 @@ function criarServidor(store, tokens, opcoes = {}) {
       if (recurso === 'estrutura' && req.method === 'GET') {
         if (!staff) return responder(res, 403, { erro: 'sem permissão' });
         const l = empresa(store, empresaId);
-        return responder(res, 200, { id: l.id, nome: l.nome, ambientes: l.ambientes });
+        return responder(res, 200, { id: l.id, nome: l.nome, ambientes: l.ambientes, modulos: { ...l.modulos } });
       }
       if (recurso === 'mapa' && req.method === 'GET') {
         if (!staff) return responder(res, 403, { erro: 'sem permissão' });
