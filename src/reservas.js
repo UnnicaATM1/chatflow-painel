@@ -1,6 +1,6 @@
 'use strict';
 
-const { loja } = require('./agentes');
+const { empresa } = require('./agentes');
 
 const DURACAO_MIN = 90;
 const DURACAO_MS = DURACAO_MIN * 60000;
@@ -17,7 +17,7 @@ function livres(store, l, data, horario, pessoas, ambiente, ignorarId) {
     for (const m of amb.mesas) {
       if (!m.reservavel || m.capacidade < pessoas) continue;
       const ocupada = store.reservas.some(
-        (r) => r.id !== ignorarId && r.lojaId === l.id && r.mesaId === m.id && r.status === 'confirmada' && i < r.fim && i + DURACAO_MS > r.inicio
+        (r) => r.id !== ignorarId && r.empresaId === l.id && r.mesaId === m.id && r.status === 'confirmada' && i < r.fim && i + DURACAO_MS > r.inicio
       );
       if (!ocupada) out.push({ mesa: m, ambiente: amb.nome });
     }
@@ -25,9 +25,9 @@ function livres(store, l, data, horario, pessoas, ambiente, ignorarId) {
   return out;
 }
 
-// Mesas ainda livres no horário, agrupadas pelos ambientes do layout da loja.
-function disponibilidade(store, lojaId, data, horario, pessoas, ignorarId) {
-  const l = loja(store, lojaId);
+// Mesas ainda livres no horário, agrupadas pelos ambientes do layout da empresa.
+function disponibilidade(store, empresaId, data, horario, pessoas, ignorarId) {
+  const l = empresa(store, empresaId);
   if (!Number.isInteger(pessoas) || pessoas < 1) throw new Error('pessoas inválido');
   const porAmbiente = new Map(l.ambientes.map((a) => [a.nome, []]));
   for (const x of livres(store, l, data, horario, pessoas, undefined, ignorarId)) {
@@ -38,11 +38,11 @@ function disponibilidade(store, lojaId, data, horario, pessoas, ignorarId) {
   };
 }
 
-function reservar(store, { lojaId, data, horario, pessoas, ambiente, mesaId, chave }) {
-  const l = loja(store, lojaId);
+function reservar(store, { empresaId, data, horario, pessoas, ambiente, mesaId, chave }) {
+  const l = empresa(store, empresaId);
   if (!Number.isInteger(pessoas) || pessoas < 1) throw new Error('pessoas inválido');
 
-  const k = `${lojaId}:${chave}`;
+  const k = `${empresaId}:${chave}`;
   if (chave && store.chaves.has(k)) return store.chaves.get(k);
 
   let ok = livres(store, l, data, horario, pessoas, ambiente);
@@ -53,7 +53,7 @@ function reservar(store, { lojaId, data, horario, pessoas, ambiente, mesaId, cha
     const { mesa, ambiente: amb } = ok[0];
     const ini = inicio(data, horario);
     const r = {
-      id: store.reservas.length + 1, lojaId, mesaId: mesa.id, ambiente: amb,
+      id: (store.seqReserva = (store.seqReserva || 0) + 1), empresaId, mesaId: mesa.id, ambiente: amb,
       data, horario, pessoas, inicio: ini, fim: ini + DURACAO_MS, status: 'confirmada',
     };
     store.reservas.push(r);
@@ -65,7 +65,7 @@ function reservar(store, { lojaId, data, horario, pessoas, ambiente, mesaId, cha
         alt.set(x.ambiente, { tipo: 'outro-ambiente', ambiente: x.ambiente });
       }
     }
-    res = { status: 'indisponivel', alternativas: [...alt.values()], disponibilidade: disponibilidade(store, lojaId, data, horario, pessoas).ambientes };
+    res = { status: 'indisponivel', alternativas: [...alt.values()], disponibilidade: disponibilidade(store, empresaId, data, horario, pessoas).ambientes };
   }
   if (chave) store.chaves.set(k, res);
   return res;
@@ -73,17 +73,17 @@ function reservar(store, { lojaId, data, horario, pessoas, ambiente, mesaId, cha
 
 function erro(msg, codigo) { return Object.assign(new Error(msg), { codigo }); }
 
-function achar(store, lojaId, id) {
-  loja(store, lojaId);
-  const r = store.reservas.find((x) => x.id === id && x.lojaId === lojaId);
+function achar(store, empresaId, id) {
+  empresa(store, empresaId);
+  const r = store.reservas.find((x) => x.id === id && x.empresaId === empresaId);
   if (!r) throw erro('reserva inexistente', 404);
   return r;
 }
 
 // Edita pessoas, data, horário e/ou mesa. Sem mesaId, mantém a mesa atual se ainda servir.
-function editarReserva(store, lojaId, id, mudancas) {
-  const l = loja(store, lojaId);
-  const r = achar(store, lojaId, id);
+function editarReserva(store, empresaId, id, mudancas) {
+  const l = empresa(store, empresaId);
+  const r = achar(store, empresaId, id);
   if (r.status !== 'confirmada') throw erro('reserva cancelada; reative antes de editar', 409);
   const pessoas = mudancas.pessoas !== undefined ? mudancas.pessoas : r.pessoas;
   const data = mudancas.data || r.data;
@@ -93,25 +93,25 @@ function editarReserva(store, lojaId, id, mudancas) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(data) || !/^\d{2}:\d{2}$/.test(horario)) throw erro('data ou horário inválido', 400);
   const alvo = livres(store, l, data, horario, pessoas, undefined, r.id).find((x) => x.mesa.id === mesaId);
   if (!alvo) {
-    return { status: 'indisponivel', disponibilidade: disponibilidade(store, lojaId, data, horario, pessoas, r.id).ambientes };
+    return { status: 'indisponivel', disponibilidade: disponibilidade(store, empresaId, data, horario, pessoas, r.id).ambientes };
   }
   const ini = inicio(data, horario);
   Object.assign(r, { pessoas, data, horario, mesaId, ambiente: alvo.ambiente, inicio: ini, fim: ini + DURACAO_MS });
   return { status: 'atualizada', reserva: publica(r) };
 }
 
-function cancelarReserva(store, lojaId, id) {
-  const r = achar(store, lojaId, id);
+function cancelarReserva(store, empresaId, id) {
+  const r = achar(store, empresaId, id);
   r.status = 'cancelada';
   return { status: 'cancelada', reserva: publica(r) };
 }
 
-function reativarReserva(store, lojaId, id) {
-  const l = loja(store, lojaId);
-  const r = achar(store, lojaId, id);
+function reativarReserva(store, empresaId, id) {
+  const l = empresa(store, empresaId);
+  const r = achar(store, empresaId, id);
   if (r.status === 'confirmada') return { status: 'confirmada', reserva: publica(r) };
   const ok = livres(store, l, r.data, r.horario, r.pessoas, undefined, r.id).some((x) => x.mesa.id === r.mesaId);
-  if (!ok) return { status: 'indisponivel', disponibilidade: disponibilidade(store, lojaId, r.data, r.horario, r.pessoas, r.id).ambientes };
+  if (!ok) return { status: 'indisponivel', disponibilidade: disponibilidade(store, empresaId, r.data, r.horario, r.pessoas, r.id).ambientes };
   r.status = 'confirmada';
   return { status: 'confirmada', reserva: publica(r) };
 }

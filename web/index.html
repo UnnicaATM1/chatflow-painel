@@ -29,7 +29,8 @@
   @media (max-width: 760px) { .pagina { padding: var(--space-4); } .grade { grid-template-columns: 1fr; } }
   .erro { color: var(--danger); font-size: 13px; }
   .campo { display: flex; flex-direction: column; gap: 4px; }
-  .campo textarea { font: 400 13px/20px var(--font-sans); padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-card); color: var(--ink); min-height: 72px; }
+  .campo textarea { font: 400 13px/20px var(--font-sans); padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-card); color: var(--ink); min-height: 72px; width: 100%; box-sizing: border-box; }
+  .campo textarea:focus-visible { outline: 2px solid var(--brand-500); outline-offset: 1px; }
 </style>
 </head>
 <body>

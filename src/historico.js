@@ -31,10 +31,10 @@ function diff(antes, depois) {
   return { antes: a, depois: d };
 }
 
-function listar(store, lojaId, { entidade, entidadeId, limite } = {}) {
+function listar(store, empresaId, { entidade, entidadeId, limite } = {}) {
   const n = Math.min(Math.max(Number(limite) || 200, 1), 1000);
   return store.historico
-    .filter((e) => e.lojaId === lojaId && (!entidade || e.entidade === entidade) && (!entidadeId || String(e.entidadeId) === String(entidadeId)))
+    .filter((e) => e.empresaId === empresaId && (!entidade || e.entidade === entidade) && (!entidadeId || String(e.entidadeId) === String(entidadeId)))
     .slice(-n)
     .reverse();
 }
