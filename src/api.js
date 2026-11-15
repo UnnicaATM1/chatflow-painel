@@ -202,8 +202,9 @@ function criarServidor(store, tokens, opcoes = {}) {
             res.setHeader('Access-Control-Max-Age', '600');
           }
         }
-        if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
       }
+      // Preflight: sempre 204 (sem cabeçalhos CORS quando a origem não é permitida ou a variável não existe)
+      if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
       // GET /saude: sem autenticação, só { ok: true }
       if (req.method === 'GET' && req.url.split('?')[0] === '/saude') return responder(res, 200, { ok: true });
       // Front-end estático (sem dados sensíveis), lista fechada de arquivos

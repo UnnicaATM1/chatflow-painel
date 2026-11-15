@@ -825,3 +825,14 @@ test('GET /app/config.js é servido como JavaScript', async () => {
   assert.strictEqual(r.headers.get('content-type'), 'text/javascript; charset=utf-8');
   fechar();
 });
+
+test('CORS: sem a variável, OPTIONS responde 204 sem nenhum cabeçalho Access-Control-*', async () => {
+  const { f, fechar } = await subir();
+  const r = await f('/empresas', { method: 'OPTIONS', headers: { Origin: ORIGEM, 'Access-Control-Request-Method': 'GET' } });
+  assert.strictEqual(r.status, 204);
+  for (const h of ['allow-origin', 'allow-methods', 'allow-headers', 'max-age', 'allow-credentials']) {
+    assert.strictEqual(r.headers.get('access-control-' + h), null, h);
+  }
+  assert.strictEqual(r.headers.get('vary'), null);
+  fechar();
+});
