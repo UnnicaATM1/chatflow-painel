@@ -1,0 +1,29 @@
+{
+  "name": "one_reservar",
+  "description": "Registra a reserva de mesa no ONE, depois que o cliente escolheu data, horário, pessoas e (opcionalmente) a mesa ou o ambiente. Só confirme a reserva ao cliente se a resposta tiver status 'confirmada'. Se vier 'indisponivel', ofereça as alternativas devolvidas em `disponibilidade`.",
+  "method": "POST",
+  "url": "{{URL_ONE}}/empresas/{{EMPRESA_ID}}/reservas",
+  "headers": {
+    "Authorization": "Bearer {{CHAVE_API}}",
+    "Content-Type": "application/json",
+    "Idempotency-Key": "{{uuid_da_reserva}}"
+  },
+  "idempotency": "Gere um identificador único por pedido de reserva (por exemplo, o id da conversa + um contador) e reenvie o MESMO valor se a chamada precisar ser repetida. Assim o ONE nunca registra a reserva duas vezes.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "data": { "type": "string", "description": "AAAA-MM-DD" },
+      "horario": { "type": "string", "description": "HH:MM" },
+      "pessoas": { "type": "integer", "minimum": 1 },
+      "mesaId": { "type": "string", "description": "Código da mesa escolhida entre as livres (opcional)" },
+      "ambiente": { "type": "string", "description": "Ambiente preferido (opcional)" }
+    },
+    "required": ["data", "horario", "pessoas"]
+  },
+  "body": { "data": "{{data}}", "horario": "{{horario}}", "pessoas": "{{pessoas}}", "mesaId": "{{mesaId}}", "ambiente": "{{ambiente}}" },
+  "response": {
+    "status": "'confirmada' (HTTP 201) ou 'indisponivel' (HTTP 200)",
+    "mesa": "código da mesa reservada",
+    "disponibilidade": "quando indisponível, as mesas que ainda estão livres"
+  }
+}

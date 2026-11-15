@@ -650,6 +650,7 @@
     var se = useState(''), msg = se[0], setMsg = se[1];
     var sj = useState(null), amostra = sj[0], setAmostra = sj[1];
     var sf = useState(0), recarga = sf[0], setRecarga = sf[1];
+    var so = useState(location.origin), origem = so[0], setOrigem = so[1];
     var base = location.origin + '/empresas/' + encodeURIComponent(p.empresa);
     useEffect(function () {
       setSt(null); setBloqueio('');
@@ -685,6 +686,7 @@
       var id = encodeURIComponent(p.empresa);
       var chamadas = { agente: chamar('/empresas/' + id + '/agente', chave) };
       if (mod.reservas) chamadas.disp = chamar('/empresas/' + id + '/disponibilidade?data=' + d + '&horario=20:00&pessoas=2', chave);
+      chamadas.ctx = chamar('/empresas/' + id + '/contexto', chave);
       if (mod.conhecimento) chamadas.conh = chamar('/empresas/' + id + '/conhecimento', chave);
       chamadas.outra = outra ? chamar('/empresas/' + encodeURIComponent(outra.id) + '/agente', chave) : Promise.resolve(null);
       chamadas.semChave = chamar('/empresas/' + id + '/agente', '');
@@ -696,14 +698,40 @@
           { ok: r.agente.status === 200, titulo: 'Ler a configuração do agente desta empresa', status: r.agente.status, ms: r.agente.ms, detalhe: r.agente.status === 200 ? 'Recebeu o bloco completo, com nome do agente.' : r.agente.status === 401 ? 'Chave inválida, revogada ou de outra empresa.' : 'Resposta inesperada.' },
         ];
         if (r.disp) linhas.push({ ok: r.disp.status === 200, titulo: 'Consultar disponibilidade de mesas (hoje 20:00, 2 pessoas)', status: r.disp.status, ms: r.disp.ms, detalhe: r.disp.status === 200 ? 'Mesas livres devolvidas por ambiente.' : 'Falhou.' });
+        linhas.push({ ok: r.ctx.status === 200 && !!(r.ctx.json && r.ctx.json.prompt), titulo: 'Ler o contexto completo do agente em uma chamada (one_contexto)', status: r.ctx.status, ms: r.ctx.ms, detalhe: r.ctx.status === 200 && r.ctx.json ? 'Prompt pronto com ' + r.ctx.json.prompt.length.toLocaleString('pt-BR') + ' caracteres.' : 'Falhou.' });
         if (r.conh) linhas.push({ ok: r.conh.status === 200, titulo: 'Ler a base de conhecimento (textos, tabelas e documentos)', status: r.conh.status, ms: r.conh.ms, detalhe: r.conh.status === 200 && r.conh.json ? r.conh.json.itens.length + ' item(ns) recebido(s).' : 'Falhou.' });
         if (r.outra) linhas.push({ ok: r.outra.status === 403, titulo: 'Isolamento: a chave NÃO pode acessar outra empresa', status: r.outra.status, ms: r.outra.ms, detalhe: r.outra.status === 403 ? 'Bloqueado, como esperado.' : 'ATENÇÃO: acesso indevido a outra empresa.' });
         linhas.push({ ok: r.semChave.status === 401, titulo: 'Sem chave, o acesso é negado', status: r.semChave.status, ms: r.semChave.ms, detalhe: r.semChave.status === 401 ? 'Bloqueado, como esperado.' : 'ATENÇÃO: acesso sem chave.' });
         setTestes(linhas);
-        setAmostra({ agente: r.agente.json, disponibilidade: r.disp && r.disp.json, conhecimento: r.conh && r.conh.json });
+        setAmostra({ agente: r.agente.json, disponibilidade: r.disp && r.disp.json, conhecimento: r.conh && r.conh.json, prompt: r.ctx.json && r.ctx.json.prompt });
       });
     }
 
+    // Definições das functions do fluxo ONE para esta empresa (a chave fica como {{CHAVE_API}}: nunca é gravada aqui).
+    function funcoesNico() {
+      var o = origem.trim().replace(/\/$/, ''), id = p.empresa, auth = { Authorization: 'Bearer {{CHAVE_API}}' };
+      var lista = [{
+        name: 'one_contexto', method: 'GET', url: o + '/empresas/' + id + '/contexto', headers: auth,
+        description: 'Traz do ONE o contexto completo do agente (nome, descrição, personalidade, habilidades, produtos, restrições, base de conhecimento) e um prompt de sistema pronto em `prompt`. Chame uma vez no início da conversa.',
+        parameters: { type: 'object', properties: {}, required: [] },
+      }];
+      if (mod.reservas) {
+        lista.push({
+          name: 'one_disponibilidade', method: 'GET', url: o + '/empresas/' + id + '/disponibilidade?data={{data}}&horario={{horario}}&pessoas={{pessoas}}', headers: auth,
+          description: 'Consulta as mesas livres em uma data e horário, separadas por ambiente. Chame SEMPRE antes de oferecer ou registrar reserva.',
+          parameters: { type: 'object', properties: { data: { type: 'string', description: 'AAAA-MM-DD' }, horario: { type: 'string', description: 'HH:MM' }, pessoas: { type: 'integer', minimum: 1 } }, required: ['data', 'horario', 'pessoas'] },
+        });
+        lista.push({
+          name: 'one_reservar', method: 'POST', url: o + '/empresas/' + id + '/reservas', headers: Object.assign({ 'Content-Type': 'application/json', 'Idempotency-Key': '{{uuid_da_reserva}}' }, auth),
+          description: "Registra a reserva. Só confirme ao cliente se a resposta tiver status 'confirmada'. Reenvie a MESMA Idempotency-Key se precisar repetir a chamada.",
+          parameters: { type: 'object', properties: { data: { type: 'string' }, horario: { type: 'string' }, pessoas: { type: 'integer', minimum: 1 }, mesaId: { type: 'string', description: 'opcional' }, ambiente: { type: 'string', description: 'opcional' } }, required: ['data', 'horario', 'pessoas'] },
+          body: { data: '{{data}}', horario: '{{horario}}', pessoas: '{{pessoas}}', mesaId: '{{mesaId}}', ambiente: '{{ambiente}}' },
+        });
+      }
+      return lista;
+    }
+    var fnico = funcoesNico();
+    var privado = /127\.0\.0\.1|localhost|\[::1\]/.test(origem);
     var linhasEnd = [
       ['GET', base + '/agente', 'Lê o nome, a descrição, a personalidade, as habilidades, os produtos e as restrições do agente'],
       ['GET', base + '/recursos', 'Diz quais recursos esta empresa usa e quais endereços estão disponíveis'],
@@ -739,6 +767,26 @@
         h('div', { className: 'k1-row' }, h('code', { className: 'mono', style: { fontSize: 12, wordBreak: 'break-all' } }, exemplo), h(K.Button, { variant: 'secondary', onClick: function () { copiar(exemplo); } }, 'Copiar exemplo'))),
 
       h('div', { className: 'k1-stack', style: { borderTop: '1px solid var(--border)', paddingTop: 16 } },
+        h('h2', null, 'Conectar ao NicoChat (fluxo ONE)'),
+        h('div', { className: 'rotulo' }, 'Uma cópia do fluxo por empresa, cada uma com a chave desta empresa.'),
+        h('div', { className: 'k1-stack', style: { background: 'var(--surface-sunken)', border: '1px solid var(--border-strong)', borderRadius: 8, padding: 12 } },
+          h('div', null, h('b', null, 'Gatilho: '), 'mensagem que começa com ', h('code', { className: 'mono' }, '#one'), ' (sem diferenciar maiúsculas).'),
+          h('ol', { style: { margin: 0, paddingLeft: 20, fontSize: 13, color: 'var(--ink-muted)' } },
+            h('li', null, 'O fluxo chama one_contexto e recebe o prompt do agente pronto.'),
+            h('li', null, 'A IA do NicoChat responde ao cliente usando esse prompt.'),
+            mod.reservas && h('li', null, 'Para reservas, a IA chama one_disponibilidade e depois one_reservar.'))),
+        h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, 'Endereço público do ONE (o NicoChat precisa conseguir acessar)'),
+          h('input', { type: 'text', value: origem, 'aria-label': 'Endereço público do ONE', style: { maxWidth: 460 }, onChange: function (e) { setOrigem(e.target.value); } })),
+        privado && h('div', { className: 'erro', role: 'alert' }, 'Este endereço só existe neste computador: o NicoChat, que roda na nuvem, não consegue chamá-lo. Use o endereço público do ONE (servidor ou túnel) antes de configurar o fluxo.'),
+        h('div', { className: 'k1-row' }, h(K.Button, { variant: 'secondary', onClick: function () { copiar(JSON.stringify(fnico, null, 2)); } }, 'Copiar todas as functions (JSON)'),
+          h('span', { className: 'rotulo' }, fnico.length + ' function(s) · coloque a chave desta empresa no lugar de {{CHAVE_API}}')),
+        fnico.map(function (fn) {
+          return h('details', { key: fn.name },
+            h('summary', { style: { cursor: 'pointer', fontSize: 13 } }, h('b', { className: 'mono' }, fn.name), ' · ' + fn.method),
+            h('pre', { className: 'mono', style: { fontSize: 12, background: 'var(--surface-sunken)', padding: 12, borderRadius: 8, maxHeight: 260, overflow: 'auto', whiteSpace: 'pre-wrap', margin: '8px 0 0' } }, JSON.stringify(fn, null, 2)));
+        })),
+
+      h('div', { className: 'k1-stack', style: { borderTop: '1px solid var(--border)', paddingTop: 16 } },
         h('h2', null, 'Testar a API desta empresa'),
         h('div', { className: 'rotulo' }, 'Cole a chave da empresa. Os testes só leem dados; nenhuma reserva é criada.'),
         h('div', { className: 'k1-row' },
@@ -756,7 +804,10 @@
           h('pre', { className: 'mono', style: { fontSize: 12, background: 'var(--surface-sunken)', padding: 12, borderRadius: 8, maxHeight: 220, overflow: 'auto', margin: 0 } }, JSON.stringify(amostra.disponibilidade, null, 2))),
         amostra && amostra.conhecimento && h('div', { className: 'k1-stack' },
           h('div', { className: 'rotulo' }, 'O que ele recebe ao ler a base de conhecimento'),
-          h('pre', { className: 'mono', style: { fontSize: 12, background: 'var(--surface-sunken)', padding: 12, borderRadius: 8, maxHeight: 280, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0 } }, JSON.stringify(amostra.conhecimento, null, 2)))));
+          h('pre', { className: 'mono', style: { fontSize: 12, background: 'var(--surface-sunken)', padding: 12, borderRadius: 8, maxHeight: 280, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0 } }, JSON.stringify(amostra.conhecimento, null, 2))),
+        amostra && amostra.prompt && h('div', { className: 'k1-stack' },
+          h('div', { className: 'k1-row' }, h('div', { className: 'rotulo' }, 'Prompt do agente montado pelo ONE (vem pronto em one_contexto)'), h(K.Button, { variant: 'secondary', onClick: function () { copiar(amostra.prompt); } }, 'Copiar prompt')),
+          h('pre', { className: 'mono', style: { fontSize: 12, background: 'var(--surface-sunken)', padding: 12, borderRadius: 8, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0 } }, amostra.prompt))));
   }
 
   function NovaEmpresa(p) {
@@ -784,13 +835,13 @@
     var st = useState(lerToken()), token = st[0], setToken = st[1];
     var sl = useState(null), empresas = sl[0], setEmpresas = sl[1];
     var sa = useState(null), empresa = sa[0], setEmpresa = sa[1];
-    var sb = useState('Reservas'), aba = sb[0], setAba = sb[1];
+    var sb = useState('Workspace'), aba = sb[0], setAba = sb[1];
     useEffect(function () {
       if (!token) return;
       api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(function (a) { return a || (l[0] && l[0].id); }); })
         .catch(function () { gravarToken(''); setToken(''); });
     }, [token]);
-    function aposExcluir() { api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(l[0] ? l[0].id : null); setAba('Reservas'); }).catch(function () {}); }
+    function aposExcluir() { api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(l[0] ? l[0].id : null); setAba('Workspace'); }).catch(function () {}); }
     function recarregarEmpresas() { api(token, 'GET', '/empresas').then(setEmpresas).catch(function () {}); }
     if (!token || !empresas) return token ? h('div', { className: 'pagina' }, h(K.EmptyState, null, 'Carregando…')) : h(Login, { onEntrar: function (t, l) { setToken(t); setEmpresas(l); setEmpresa(l[0] && l[0].id); } });
     var nome = (empresas.filter(function (l) { return l.id === empresa; })[0] || {}).nome || '';
@@ -805,11 +856,11 @@
             h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); } }, 'Sair'))));
     }
     var modAtual = (empresas.filter(function (l) { return l.id === empresa; })[0] || {}).modulos || { reservas: true, conhecimento: true };
-    var abas = [].concat(modAtual.reservas ? ['Reservas', 'Mapa de mesas'] : [], ['Configuração', 'Agentes'], modAtual.conhecimento ? ['Conhecimento'] : [], ['API', 'Histórico']);
+    var abas = [].concat(modAtual.reservas ? ['Workspace', 'Mapa de mesas'] : [], ['Configuração', 'Agentes'], modAtual.conhecimento ? ['Conhecimento'] : [], ['API', 'Histórico']);
     var abaAtual = abas.indexOf(aba) >= 0 ? aba : abas[0];
-    var tela = abaAtual === 'Reservas' ? Reservas : abaAtual === 'Mapa de mesas' ? Mapa : abaAtual === 'Configuração' ? Configuracao : abaAtual === 'Histórico' ? Historico : abaAtual === 'API' ? ApiEmpresa : abaAtual === 'Conhecimento' ? Conhecimento : Agentes;
+    var tela = abaAtual === 'Workspace' ? Reservas : abaAtual === 'Mapa de mesas' ? Mapa : abaAtual === 'Configuração' ? Configuracao : abaAtual === 'Histórico' ? Historico : abaAtual === 'API' ? ApiEmpresa : abaAtual === 'Conhecimento' ? Conhecimento : Agentes;
     return h('div', null,
-      h(K.TopBar, { logoSrc: '/app/logo.png', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Alimentos e Bebidas'] : ['Atendimento'], active: modAtual.reservas && ['Reservas', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Alimentos e Bebidas' : 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+      h(K.TopBar, { logoSrc: '/app/logo.png', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Alimentos e Bebidas'] : ['Atendimento'], active: modAtual.reservas && ['Workspace', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Alimentos e Bebidas' : 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
       h(K.Tabs, { items: abas, value: abaAtual, onChange: setAba }),
       h('main', { className: 'pagina' },
         h('div', { className: 'k1-row' }, h('h1', null, abaAtual + ' · ' + nome),

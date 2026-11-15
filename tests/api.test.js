@@ -542,3 +542,45 @@ test('excluir empresa guarda o conhecimento no instantâneo (sem arquivos)', asy
   assert.strictEqual(ev.nome, 'empresa_1');
   fechar();
 });
+
+test('contexto do agente em uma chamada, com prompt pronto', async () => {
+  const { f, fechar } = await subir();
+  const json = (caminho, metodo, corpo, token = T.cliente) => f(caminho, { token, method: metodo, body: corpo });
+  const k = await (await json('/empresas/empresa_1/api/chave', 'POST', {}, T.integracao)).json();
+  await json('/empresas/empresa_1/agente', 'PATCH', { campos: { nome: 'Nico', descricao: 'Cantina italiana.', personalidade: 'Simpático e objetivo.', habilidades: 'Responder dúvidas.', produtos: 'Massas e vinhos.', restricoes: 'Nunca prometer desconto.' } }, T.integracao);
+  await json('/empresas/empresa_1/conhecimento', 'POST', { tipo: 'tabela', titulo: 'Preços', tabela: { colunas: ['Prato', 'Preço'], linhas: [['Lasanha', 'R$ 52,00'], ['Risoto | trufa', 'R$ 70,00']] } });
+  await json('/empresas/empresa_1/conhecimento', 'POST', { tipo: 'texto', titulo: 'Horário', texto: 'Aberto de terça a domingo.' });
+  await json('/empresas/empresa_1/conhecimento', 'POST', { tipo: 'documento', titulo: 'Cardápio', arquivo: { nome: 'cardapio.pdf', base64: Buffer.from('%PDF-1.4 x').toString('base64') } });
+
+  const r = await f('/empresas/empresa_1/contexto', { token: k.chave });
+  assert.strictEqual(r.status, 200);
+  const c = await r.json();
+  assert.deepStrictEqual(c.empresa, { id: 'empresa_1', nome: 'empresa_1' });
+  assert.strictEqual(c.agente.nome, 'Nico');
+  assert.deepStrictEqual(c.recursos, { reservas: true, conhecimento: true });
+  assert.strictEqual(c.conhecimento.length, 3);
+  // prompt: tem cada parte, tabela em markdown, link do documento e as regras de reserva
+  for (const trecho of ['Você é Nico, atendente virtual da empresa empresa_1', 'Cantina italiana.', '## Personalidade e objetivo', 'Simpático e objetivo.',
+    '## Habilidades', '## Produtos e serviços', 'Massas e vinhos.', '## Restrições', 'Nunca prometer desconto.',
+    '| Prato | Preço |', '| Lasanha | R$ 52,00 |', '| Risoto / trufa | R$ 70,00 |', 'Aberto de terça a domingo.',
+    '/empresas/empresa_1/conhecimento/3/arquivo', '## Reservas de mesa', 'só confirme ao cliente depois que o sistema responder "confirmada"']) {
+    assert.ok(c.prompt.includes(trecho), `faltou no prompt: ${trecho}`);
+  }
+  assert.ok(!c.prompt.includes('—') && !c.prompt.includes('–'), 'o prompt não deve ter travessão');
+
+  // sem recursos ligados o prompt não fala de reservas nem de base de conhecimento
+  await json('/empresas/empresa_1/modulos', 'PATCH', { reservas: false, conhecimento: false });
+  const c2 = await (await f('/empresas/empresa_1/contexto', { token: k.chave })).json();
+  assert.deepStrictEqual([c2.recursos, c2.conhecimento], [{ reservas: false, conhecimento: false }, []]);
+  assert.ok(!c2.prompt.includes('Reservas de mesa') && !c2.prompt.includes('Base de conhecimento'));
+  assert.ok(c2.prompt.includes('Nunca prometer desconto.'));
+
+  // agente vazio ainda gera um prompt mínimo; chave de outra empresa e anônimo não leem
+  const outra = await (await json('/empresas', 'POST', { nome: 'Vazia' })).json();
+  const kv = await (await json(`/empresas/${outra.id}/api/chave`, 'POST', {}, T.integracao)).json();
+  const cv = await (await f(`/empresas/${outra.id}/contexto`, { token: kv.chave })).json();
+  assert.ok(cv.prompt.startsWith('Você é o assistente, atendente virtual da empresa Vazia.'));
+  assert.strictEqual((await f('/empresas/empresa_1/contexto', { token: kv.chave })).status, 403);
+  assert.strictEqual((await f('/empresas/empresa_1/contexto')).status, 401);
+  fechar();
+});

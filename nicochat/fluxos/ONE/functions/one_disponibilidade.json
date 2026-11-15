@@ -1,0 +1,21 @@
+{
+  "name": "one_disponibilidade",
+  "description": "Consulta no ONE as mesas livres de um restaurante em uma data e horário, separadas por ambiente. Chame SEMPRE antes de oferecer ou registrar uma reserva. Só existe para empresas com o recurso de reservas ligado.",
+  "method": "GET",
+  "url": "{{URL_ONE}}/empresas/{{EMPRESA_ID}}/disponibilidade?data={{data}}&horario={{horario}}&pessoas={{pessoas}}",
+  "headers": {
+    "Authorization": "Bearer {{CHAVE_API}}"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "data": { "type": "string", "description": "Data da reserva no formato AAAA-MM-DD" },
+      "horario": { "type": "string", "description": "Horário no formato HH:MM, 24 horas" },
+      "pessoas": { "type": "integer", "minimum": 1, "description": "Número de pessoas" }
+    },
+    "required": ["data", "horario", "pessoas"]
+  },
+  "response": {
+    "ambientes": "[{ ambiente: 'salao', mesas: [{ id: 'S1', capacidade: 4 }] }]  (mesas livres, com capacidade suficiente, por ambiente)"
+  }
+}

@@ -5,10 +5,10 @@
 <!-- STATUS_START -->
 design-system: 60%
 telas-referencia: 100%
-frontend: 70%
-backend: 78%
+frontend: 72%
+backend: 82%
 planejamento-tela-01: 100%
-geral: 64%
+geral: 67%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -51,6 +51,9 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - [ ] Base de conhecimento: documentos e itens ficam em memória (arquivos em base64, até 4 MB cada, 200 itens por empresa); levar para banco/armazenamento de arquivos e extrair o texto de PDF, Word e Excel (hoje só .txt, .md e .csv têm texto lido pela API; os demais só baixam)
 - [ ] Trocar os `window.confirm` da aba API (gerar nova chave, revogar) por confirmação na própria tela, como já é feito ao excluir item e empresa
 
+- [ ] NicoChat: conectar o MCP do NicoChat à sessão e criar o fluxo ONE na pasta de fluxos do workspace Unnicaflow, canal Chatflow (hoje só existem os arquivos em `nicochat/fluxos/ONE/`, nada foi criado lá)
+- [ ] Publicar o ONE em endereço público (servidor ou túnel): o NicoChat roda na nuvem e não alcança `127.0.0.1`. Depois, testar de verdade o gatilho `#one` ponta a ponta
+
 ## 🧠 Aprendizados importantes
 - Design system foi montado a partir de 9 telas do Hotel Demonstração (Atendimento, Gestão, Operação, A&B) e do PDF de 10/11/2026; nada veio do código-fonte.
 - Paleta: moldura navy, trabalho claro, ciano (`brand-500`) só para ação; fontes Inter (UI), JetBrains Mono (números) e Fraunces (documentos).
@@ -83,6 +86,8 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - Recursos por empresa (`modulos`): `reservas` e `conhecimento`, ligáveis na criação (`POST /empresas {nome, modulos}`) e depois em Configuração (`PATCH /empresas/:id/modulos`). Desligado, a aba some e a API responde 404 `recurso "..." não habilitado para esta empresa`; os dados ficam guardados. `GET /empresas/:id/recursos` (aceita a chave da empresa) diz ao sistema de conversa o que existe e os endereços. Empresa sem mesas (ex.: oficina com tabela de preços) usa só agente e conhecimento.
 - Base de conhecimento (`src/conhecimento.js`): itens `texto` (até 50.000 caracteres), `tabela` (até 20 colunas, 1.000 linhas, 500 caracteres por célula) e `documento` (.txt, .md, .csv, .pdf, .docx, .xlsx até 4 MB; o conteúdo é checado pelos primeiros bytes, nada de HTML/SVG). `GET /empresas/:id/conhecimento` devolve tudo de uma vez (a chave da empresa só lê); `.../conhecimento/:itemId` e `.../:itemId/arquivo` (anexo, `nosniff`, `CSP sandbox`). POST/PATCH/DELETE só para a equipe; tipo do item não muda. Tudo vai para o histórico (sem os bytes do arquivo). Na tela: aba Conhecimento com editor de tabela, colar de planilha (TAB, `;` ou `,`) e upload.
 - Terminal do Windows (Git Bash) não envia UTF-8 em `curl -d` com acentos: o texto chega corrompido. Para semear dados de demonstração use um script Node, não `curl`.
+
+- Integração NicoChat (fluxo ONE): gatilho `#one`; `GET /empresas/:id/contexto` (aceita a chave da empresa) devolve numa chamada o agente, os recursos, a base de conhecimento e um `prompt` de sistema montado em `src/contexto.js` (sem travessões, regra do design system para prompts de agente). Pasta `nicochat/fluxos/ONE/` com fluxo, 3 functions e `simular-nicochat.js` (simula o fluxo contra a API; com `--reservar` grava uma reserva de teste; usa `process.exitCode`, nunca `process.exit`, porque o Node no Windows aborta com erro do libuv). A aba API gera as functions por empresa e mostra o prompt. Formato de importação do NicoChat ainda não conhecido: os JSON são neutros.
 
 ## 🚫 Armadilhas conhecidas
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.

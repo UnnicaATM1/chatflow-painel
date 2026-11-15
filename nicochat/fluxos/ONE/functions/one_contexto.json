@@ -1,0 +1,16 @@
+{
+  "name": "one_contexto",
+  "description": "Traz do ONE o contexto completo do agente desta empresa: nome, descrição, personalidade, habilidades, produtos e serviços, restrições, base de conhecimento (tabelas de preços, textos, documentos) e um prompt de sistema já montado em `prompt`. Chame uma vez no início da conversa.",
+  "method": "GET",
+  "url": "{{URL_ONE}}/empresas/{{EMPRESA_ID}}/contexto",
+  "headers": {
+    "Authorization": "Bearer {{CHAVE_API}}"
+  },
+  "parameters": { "type": "object", "properties": {}, "required": [] },
+  "response": {
+    "prompt": "texto pronto para usar como instrução de sistema da IA",
+    "agente": "bloco do agente (nome, descricao, personalidade, habilidades, produtos, restricoes)",
+    "recursos": "{ reservas: boolean, conhecimento: boolean }",
+    "conhecimento": "lista de itens (texto, tabela, documento)"
+  }
+}

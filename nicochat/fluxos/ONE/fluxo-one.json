@@ -1,0 +1,46 @@
+{
+  "nome": "ONE",
+  "descricao": "Atendimento por IA com o contexto do agente vindo do ONE. A conversa é iniciada pela mensagem #one. Cada empresa do ONE tem a sua cópia deste fluxo, com a sua própria chave de API.",
+  "workspace": "Unnicaflow",
+  "canal": "Chatflow",
+  "pasta": "ONE",
+  "observacao_formato": "Este arquivo descreve o fluxo em formato neutro. Adapte os nomes dos blocos ao formato de importação do NicoChat.",
+  "variaveis": {
+    "URL_ONE": "endereço PÚBLICO do ONE (não funciona com 127.0.0.1: o NicoChat roda na nuvem)",
+    "EMPRESA_ID": "ex.: empresa_1 (aba API do ONE mostra o id de cada empresa)",
+    "CHAVE_API": "chave k1_... gerada na aba API da empresa (guarde como segredo, nunca no texto do fluxo)"
+  },
+  "gatilho": {
+    "tipo": "mensagem_recebida",
+    "condicao": "a mensagem, sem espaços nas pontas e sem diferenciar maiúsculas, começa com #one",
+    "texto_do_cliente": "tudo que vem depois de #one; se vazio, use a saudação padrão do agente"
+  },
+  "passos": [
+    {
+      "id": "contexto",
+      "tipo": "funcao",
+      "funcao": "one_contexto",
+      "salvar_em": "contexto",
+      "se_falhar": "responder 'Não consegui acessar as informações agora. Já avisei a equipe.' e encerrar; não inventar respostas"
+    },
+    {
+      "id": "responder",
+      "tipo": "ia",
+      "instrucao_de_sistema": "{{contexto.prompt}}",
+      "mensagem_do_usuario": "{{texto_do_cliente}}",
+      "funcoes_disponiveis": ["one_disponibilidade", "one_reservar"],
+      "observacao": "Se contexto.recursos.reservas for falso, não ofereça as funções de reserva. Mantenha o histórico da conversa nas mensagens seguintes e NÃO chame one_contexto de novo, a menos que a conversa recomece com #one."
+    },
+    {
+      "id": "enviar",
+      "tipo": "enviar_mensagem",
+      "texto": "{{resposta_da_ia}}"
+    }
+  ],
+  "regras": [
+    "Só confirmar reserva ao cliente depois que one_reservar devolver status 'confirmada'.",
+    "Sempre chamar one_disponibilidade antes de oferecer horário ou mesa.",
+    "Reenviar a mesma Idempotency-Key se one_reservar precisar ser repetido.",
+    "Uma chave de API por empresa: a chave de uma empresa não funciona nas outras (o ONE devolve 403)."
+  ]
+}

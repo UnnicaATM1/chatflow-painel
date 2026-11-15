@@ -10,6 +10,7 @@ const { registrar, diff, listar } = require('./historico');
 const { addEmpresa } = require('./store');
 const { mapa } = require('./mapa');
 const conhecimento = require('./conhecimento');
+const { contexto, recursosDe } = require('./contexto');
 
 const LIMITE_CORPO = 512 * 1024; // 5 campos de texto somam até ~49 mil caracteres
 const LIMITE_CORPO_ARQUIVO = 6 * 1024 * 1024; // documento de até 4 MB em base64
@@ -336,18 +337,11 @@ function criarServidor(store, tokens, opcoes = {}) {
 
       // GET /empresas/:id/recursos: o que esta empresa usa e quais endereços o sistema de conversa pode chamar
       if (recurso === 'recursos' && req.method === 'GET') {
-        const e = empresa(store, empresaId);
-        const base = `/empresas/${e.id}`;
-        const endpoints = [{ metodo: 'GET', caminho: `${base}/agente`, descricao: 'configuração do agente' }];
-        if (e.modulos.reservas) {
-          endpoints.push({ metodo: 'GET', caminho: `${base}/disponibilidade?data=AAAA-MM-DD&horario=HH:MM&pessoas=N`, descricao: 'mesas livres por ambiente' });
-          endpoints.push({ metodo: 'POST', caminho: `${base}/reservas`, descricao: 'registrar reserva (cabeçalho Idempotency-Key)' });
-        }
-        if (e.modulos.conhecimento) {
-          endpoints.push({ metodo: 'GET', caminho: `${base}/conhecimento`, descricao: 'todos os itens de conhecimento (textos, tabelas, documentos)' });
-          endpoints.push({ metodo: 'GET', caminho: `${base}/conhecimento/:itemId`, descricao: 'um item' });
-        }
-        return responder(res, 200, { empresa: e.nome, reservas: e.modulos.reservas, conhecimento: e.modulos.conhecimento, endpoints });
+        return responder(res, 200, recursosDe(empresa(store, empresaId)));
+      }
+      // GET /empresas/:id/contexto: tudo o que o agente precisa em uma chamada (config, conhecimento, recursos e prompt pronto)
+      if (recurso === 'contexto' && req.method === 'GET') {
+        return responder(res, 200, contexto(store, empresaId));
       }
       // PATCH /empresas/:id/modulos { reservas?, conhecimento? }: liga ou desliga recursos (os dados são mantidos)
       if (recurso === 'modulos' && req.method === 'PATCH') {
