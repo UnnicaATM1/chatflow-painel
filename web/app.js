@@ -1,6 +1,8 @@
 'use strict';
 
 (function () {
+  // Endereço da API vindo de config.js (sem barra no fim). Vazio = mesma origem do painel.
+  var BASE = String((window.ONE_CONFIG && window.ONE_CONFIG.apiBase) || '').replace(/\/$/, '');
   var R = window.React, h = R.createElement, K = window.KendjiOne;
   var useState = R.useState, useEffect = R.useEffect, useCallback = R.useCallback;
 
@@ -16,7 +18,7 @@
   function gravarToken(t) { try { if (t) sessionStorage.setItem('k1token', t); else sessionStorage.removeItem('k1token'); } catch (e) { /* ignora */ } }
 
   function api(token, metodo, caminho, corpo) {
-    return fetch(caminho, {
+    return fetch(BASE + caminho, {
       method: metodo,
       headers: Object.assign({ Authorization: 'Bearer ' + token }, lerOperador() ? { 'X-Operador': encodeURIComponent(lerOperador()) } : {}, corpo ? { 'Content-Type': 'application/json' } : {}),
       body: corpo ? JSON.stringify(corpo) : undefined,
@@ -486,7 +488,7 @@
   }
   function tamanhoBr(n) { return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1).replace('.', ',') + ' KB' : (n / 1048576).toFixed(1).replace('.', ',') + ' MB'; }
   function baixar(token, caminho, nome, aoErro) {
-    fetch(caminho, { headers: { Authorization: 'Bearer ' + token } })
+    fetch(BASE + caminho, { headers: { Authorization: 'Bearer ' + token } })
       .then(function (r) { if (!r.ok) throw new Error('Não foi possível baixar (' + r.status + ').'); return r.blob(); })
       .then(function (b) { var u = URL.createObjectURL(b), a = document.createElement('a'); a.href = u; a.download = nome; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1000); })
       .catch(function (e) { aoErro(e.message); });
@@ -658,8 +660,8 @@
     var se = useState(''), msg = se[0], setMsg = se[1];
     var sj = useState(null), amostra = sj[0], setAmostra = sj[1];
     var sf = useState(0), recarga = sf[0], setRecarga = sf[1];
-    var so = useState(location.origin), origem = so[0], setOrigem = so[1];
-    var base = location.origin + '/empresas/' + encodeURIComponent(p.empresa);
+    var so = useState(BASE || location.origin), origem = so[0], setOrigem = so[1];
+    var base = (BASE || location.origin) + '/empresas/' + encodeURIComponent(p.empresa);
     useEffect(function () {
       setSt(null); setBloqueio('');
       api(p.token, 'GET', '/empresas/' + encodeURIComponent(p.empresa) + '/api').then(setSt)
@@ -681,7 +683,7 @@
     // Chamadas feitas com a chave colada, exatamente como o sistema de conversa faria.
     function chamar(caminho, chave) {
       var t0 = performance.now();
-      return fetch(caminho, { headers: chave ? { Authorization: 'Bearer ' + chave } : {} }).then(function (r) {
+      return fetch(BASE + caminho, { headers: chave ? { Authorization: 'Bearer ' + chave } : {} }).then(function (r) {
         return r.text().then(function (txt) { var j = null; try { j = JSON.parse(txt); } catch (e) { /* texto puro */ } return { status: r.status, json: j, ms: Math.round(performance.now() - t0) }; });
       }).catch(function () { return { status: 0, json: null, ms: Math.round(performance.now() - t0) }; });
     }
@@ -863,7 +865,7 @@
     var nome = (empresas.filter(function (l) { return l.id === empresa; })[0] || {}).nome || '';
     if (empresas.length === 0) {
       return h('div', null,
-        h(K.TopBar, { logoSrc: '/app/logo.png', unit: '', modules: ['Atendimento', 'Alimentos e Bebidas'], active: 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+        h(K.TopBar, { logoSrc: 'logo.png', unit: '', modules: ['Atendimento', 'Alimentos e Bebidas'], active: 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
         h('main', { className: 'pagina' },
           h('h1', null, 'Nenhuma empresa'),
           h(K.EmptyState, null, 'Crie a primeira empresa para começar.'),
@@ -876,7 +878,7 @@
     var abaAtual = abas.indexOf(aba) >= 0 ? aba : abas[0];
     var tela = abaAtual === 'Workspace' ? Reservas : abaAtual === 'Mapa de mesas' ? Mapa : abaAtual === 'Configuração' ? Configuracao : abaAtual === 'Histórico' ? Historico : abaAtual === 'API' ? ApiEmpresa : abaAtual === 'Conhecimento' ? Conhecimento : Agentes;
     return h('div', null,
-      h(K.TopBar, { logoSrc: '/app/logo.png', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Alimentos e Bebidas'] : ['Atendimento'], active: modAtual.reservas && ['Workspace', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Alimentos e Bebidas' : 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+      h(K.TopBar, { logoSrc: 'logo.png', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Alimentos e Bebidas'] : ['Atendimento'], active: modAtual.reservas && ['Workspace', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Alimentos e Bebidas' : 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
       h(K.Tabs, { items: abas, value: abaAtual, onChange: setAba }),
       h('main', { className: 'pagina' },
         h('div', { className: 'k1-row' }, h('h1', null, abaAtual + ' · ' + nome),
