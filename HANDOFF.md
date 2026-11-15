@@ -115,6 +115,7 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - Plano tela 01: `docs/plano-01-atendimento-conversas.md` (versão completa com PDF e dados necessários; `docs/plano-tela-01.md` é a primeira versão)
 
 ## 📚 Histórico recente
+- 2026-11-15 — TASK-006: o corpo só é lido depois de autenticar (`req.lerCorpo(limite)` sob demanda; 413 com JSON no limite da rota; corpo não pedido é descartado, não guardado); 51 testes
 - 2026-11-15 — TASK-005: ONE pronto para portar (ESM, plataforma injetável, núcleo `tratar`, adaptador Node, repositório com operações atômicas, datas sem fuso, testes de portabilidade); 48 testes, simulador do NicoChat verificado contra `node src/server.js`
 - 2026-11-14 — TASK-001 reaberta pelo usuário: plano completo em `docs/plano-01-atendimento-conversas.md` (PDF, dados necessários, contratos a definir), validado pelo T001
 - 2026-11-14 — TASK-001 parte 2: plano documental da tela 01 e verificação dos sete componentes citados; sem código ou mudanças no design system

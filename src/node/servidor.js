@@ -5,7 +5,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { criarContexto, tratar, cabecalhosCors, LIMITE_CORPO_ARQUIVO } from '../nucleo.js';
+import { criarContexto, tratar, cabecalhosCors } from '../nucleo.js';
 
 const WEB_DIR = fileURLToPath(new URL('../../web', import.meta.url));
 const ESTATICOS = {
@@ -18,14 +18,29 @@ const ESTATICOS = {
   'logo.png': 'image/png',
 };
 
-// Lê o corpo inteiro (até o maior limite de rota; o núcleo aplica o limite de cada rota).
-function lerBytes(req, limite) {
+// Lê o corpo sob demanda (o núcleo só chama depois de autenticar), com o limite da rota. Passou do limite:
+// para de guardar bytes e recusa com 413; o resto que o cliente ainda enviar é descartado (até DESCARTE_MAX, depois
+// a conexão é derrubada), para o cliente conseguir ler a resposta em vez de levar um reset de conexão.
+const DESCARTE_MAX = 32 * 1024 * 1024;
+
+// Corpo que ninguém pediu (recusado antes de autenticar, rota sem corpo): não é guardado, só descartado,
+// para o cliente poder ler a resposta. Acima de DESCARTE_MAX a conexão é derrubada.
+function descartar(req, estado) {
+  if (estado.lido) return;
+  estado.lido = true;
+  req.on('data', (c) => { estado.descartado += c.length; if (estado.descartado > DESCARTE_MAX) req.destroy(); });
+  req.resume();
+}
+
+function lerBytes(req, limite, estado) {
+  estado.lido = true;
   return new Promise((resolve, reject) => {
     let tam = 0;
-    const partes = [];
+    let partes = [];
     req.on('data', (c) => {
+      if (estado.estourou) { estado.descartado += c.length; if (estado.descartado > DESCARTE_MAX) req.destroy(); return; }
       tam += c.length;
-      if (tam > limite) { reject(Object.assign(new Error('corpo grande demais'), { codigo: 413 })); req.destroy(); return; }
+      if (tam > limite) { estado.estourou = true; partes = []; reject(Object.assign(new Error('corpo grande demais'), { codigo: 413 })); return; }
       partes.push(c);
     });
     req.on('end', () => resolve(partes.length ? new Uint8Array(Buffer.concat(partes)) : null));
@@ -50,7 +65,8 @@ function escrever(res, status, headers, corpo) {
 export function criarServidor(store, tokens, opcoes = {}) {
   const ctx = criarContexto({ ...opcoes, store, tokens });
   return http.createServer(async (req, res) => {
-    const reqN = { metodo: req.method, url: req.url, headers: req.headers, corpo: null, ip: req.socket.remoteAddress || 'desconhecido' };
+    const estado = { estourou: false, lido: false, descartado: 0 };
+    const reqN = { metodo: req.method, url: req.url, headers: req.headers, ip: req.socket.remoteAddress || 'desconhecido', lerCorpo: (limite) => lerBytes(req, limite, estado) };
     try {
       const caminho = req.url.split('?')[0];
       // Painel estático (sem dados sensíveis), lista fechada de arquivos. Preflight (OPTIONS) vai sempre ao núcleo.
@@ -63,10 +79,11 @@ export function criarServidor(store, tokens, opcoes = {}) {
         if (!tipo) return escrever(res, 404, cors, { erro: 'arquivo inexistente' });
         return escrever(res, 200, { ...cors, 'Content-Type': tipo }, new Uint8Array(fs.readFileSync(path.join(WEB_DIR, nome))));
       }
-      reqN.corpo = await lerBytes(req, LIMITE_CORPO_ARQUIVO);
       const r = await tratar(reqN, ctx);
+      descartar(req, estado);
       return escrever(res, r.status, r.headers, r.corpo);
     } catch (e) {
+      descartar(req, estado);
       const codigo = e.codigo || (e instanceof Error && !e.codigo ? 400 : 500);
       return escrever(res, codigo, cabecalhosCors(ctx, reqN), { erro: e.message });
     }

@@ -1,7 +1,7 @@
 // Núcleo da API: uma função de requisição para resposta, sem Node.
 //
 //   tratar(req, ctx) -> { status, headers, corpo }
-//   req = { metodo, url (caminho + query), headers (chaves em minúsculas), corpo: Uint8Array|null, ip }
+//   req = { metodo, url (caminho + query), headers (chaves em minúsculas), ip, corpo: Uint8Array|null | lerCorpo(limite) }
 //   corpo da resposta: objeto/array (o adaptador serializa como JSON), Uint8Array (binário) ou null.
 //
 // Nada de node:*, Buffer, process ou require aqui: o que depende do ambiente vem em ctx.plat (src/plataforma.js).
@@ -18,9 +18,11 @@ import { fusoDe } from './tempo.js';
 export const LIMITE_CORPO = 512 * 1024; // 5 campos de texto somam até ~49 mil caracteres
 export const LIMITE_CORPO_ARQUIVO = 6 * 1024 * 1024; // documento de até 4 MB em base64
 
-// O corpo (bytes) já veio inteiro do adaptador; aqui só se aplica o limite da rota e se lê o JSON.
-function lerCorpo(req, limite = LIMITE_CORPO) {
-  const c = req.corpo;
+// O corpo só é lido DEPOIS da autenticação e só pelas rotas que precisam dele, com o limite da rota.
+// req.corpo (bytes já em mãos, usado em testes e em adaptadores que recebem tudo de uma vez) ou
+// req.lerCorpo(limite) (leitura sob demanda; o adaptador recusa com 413 se passar do limite sem ler o resto).
+async function lerCorpo(req, limite = LIMITE_CORPO) {
+  const c = req.corpo !== undefined ? req.corpo : (req.lerCorpo ? await req.lerCorpo(limite) : null);
   if (c && c.length > limite) throw Object.assign(new Error('corpo grande demais'), { codigo: 413 });
   if (!c || !c.length) return {};
   try { return JSON.parse(new TextDecoder('utf-8', { ignoreBOM: true }).decode(c)); }
@@ -221,7 +223,7 @@ export async function tratar(req, ctx) {
     // POST /empresas { nome }  (adicionar empresa: nasce com agente vazio, sem ambientes e sem chave de API)
     if (partes[0] === 'empresas' && partes.length === 1 && req.metodo === 'POST') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
-      const b = lerCorpo(req);
+      const b = await lerCorpo(req);
       const v = await validarNome(store, b.nome);
       if (v.erro) return resp(v.codigo, { erro: v.erro });
       const vm = validarModulos(b.modulos);
@@ -264,7 +266,7 @@ export async function tratar(req, ctx) {
     if (partes[0] === 'empresas' && partes.length === 2 && req.metodo === 'PATCH') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
       const l = await empresa(store, decodeURIComponent(partes[1]));
-      const b = lerCorpo(req);
+      const b = await lerCorpo(req);
       const v = await validarNome(store, b.nome, l.id);
       if (v.erro) return resp(v.codigo, { erro: v.erro });
       const nome = v.nome;
@@ -282,7 +284,7 @@ export async function tratar(req, ctx) {
       const mesaId = decodeURIComponent(partes[3]);
       const mesa = l.ambientes.flatMap((a) => a.mesas).find((m) => m.id === mesaId);
       if (!mesa) return resp(404, { erro: 'mesa inexistente' });
-      const b = lerCorpo(req);
+      const b = await lerCorpo(req);
       const antesMesa = { capacidade: mesa.capacidade, reservavel: mesa.reservavel };
       if (b.capacidade !== undefined) {
         if (!Number.isInteger(b.capacidade) || b.capacidade < 1 || b.capacidade > 100) return resp(400, { erro: 'capacidade inválida' });
@@ -303,7 +305,7 @@ export async function tratar(req, ctx) {
       if (!Number.isInteger(rid)) return resp(404, { erro: 'reserva inexistente' });
       const ator = quem(req, papel);
       if (req.metodo === 'DELETE') return resp(200, await mudarReserva(store, lid, rid, () => cancelarReserva(store, lid, rid), ator));
-      const b = lerCorpo(req);
+      const b = await lerCorpo(req);
       const r = await mudarReserva(store, lid, rid, () => (b.status === 'cancelada' ? cancelarReserva(store, lid, rid)
         : b.status === 'confirmada' ? reativarReserva(store, lid, rid)
           : editarReserva(store, lid, rid, { pessoas: b.pessoas, data: b.data, horario: b.horario, mesaId: b.mesaId, nomeCliente: b.nomeCliente, contato: b.contato })), ator);
@@ -327,7 +329,7 @@ export async function tratar(req, ctx) {
       if (partes.length === 3 && req.metodo === 'GET') return resp(200, { itens: await conhecimento.listarPublico(store, eid) });
       if (partes.length === 3 && req.metodo === 'POST') {
         if (!staff) return resp(403, { erro: 'sem permissão' });
-        const item = await conhecimento.criar(store, eid, lerCorpo(req, LIMITE_CORPO_ARQUIVO));
+        const item = await conhecimento.criar(store, eid, await lerCorpo(req, LIMITE_CORPO_ARQUIVO));
         await registrar(store, { empresaId: eid, entidade: 'conhecimento', entidadeId: item.id, acao: 'criada', ...ator, depois: conhecimento.resumo(item) });
         return resp(201, conhecimento.publica(eid, item));
       }
@@ -340,7 +342,7 @@ export async function tratar(req, ctx) {
       if (partes.length === 4 && req.metodo === 'PATCH') {
         if (!staff) return resp(403, { erro: 'sem permissão' });
         const antes = conhecimento.resumo((await conhecimento.achar(store, eid, itemId)).item);
-        const item = await conhecimento.editar(store, eid, itemId, lerCorpo(req, LIMITE_CORPO_ARQUIVO));
+        const item = await conhecimento.editar(store, eid, itemId, await lerCorpo(req, LIMITE_CORPO_ARQUIVO));
         const d = diff(antes, conhecimento.resumo(item));
         if (Object.keys(d.depois).length) await registrar(store, { empresaId: eid, entidade: 'conhecimento', entidadeId: itemId, acao: 'editada', ...ator, ...d });
         return resp(200, conhecimento.publica(eid, item));
@@ -380,7 +382,7 @@ export async function tratar(req, ctx) {
     if (recurso === 'modulos' && req.metodo === 'PATCH') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
       const e = await empresa(store, empresaId);
-      const vm = validarModulos(lerCorpo(req));
+      const vm = validarModulos(await lerCorpo(req));
       if (vm.erro) return resp(400, { erro: vm.erro });
       if (Object.keys(vm.modulos).length === 0) return resp(400, { erro: 'nenhum módulo informado' });
       const antes = Object.fromEntries(MODULOS.map((m) => [`modulo_${m}`, e.modulos[m]]));
@@ -397,7 +399,7 @@ export async function tratar(req, ctx) {
     // ou, por compatibilidade, { campo, valor }
     if (recurso === 'agente' && req.metodo === 'PATCH') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
-      const b = lerCorpo(req);
+      const b = await lerCorpo(req);
       const mud = b.campos && typeof b.campos === 'object' && !Array.isArray(b.campos) ? b.campos : { [b.campo]: b.valor };
       const antesCfg = await lerConfig(store, empresaId);
       await atualizarVarios(store, empresaId, mud, papel);
@@ -410,7 +412,7 @@ export async function tratar(req, ctx) {
       return resp(200, cfg);
     }
     if (recurso === 'reservas' && req.metodo === 'POST') {
-      const b = lerCorpo(req);
+      const b = await lerCorpo(req);
       const chave = req.headers['idempotency-key'] || b.chave;
       if (!chave) return resp(400, { erro: 'chave de idempotência obrigatória (Idempotency-Key)' });
       if (!/^\d{4}-\d{2}-\d{2}$/.test(b.data || '') || !/^\d{2}:\d{2}$/.test(b.horario || '')) {
@@ -453,7 +455,7 @@ export async function tratar(req, ctx) {
       const agora = plat.agora();
       const tent = await store.tentativasAdminObter();
       if (tent.ate > agora) return resp(429, { erro: `muitas tentativas incorretas; tente de novo em ${Math.ceil((tent.ate - agora) / 60000)} min` });
-      const b = lerCorpo(req);
+      const b = await lerCorpo(req);
       const ator = quem(req, papel);
       if (typeof b.senha !== 'string' || !plat.iguaisTempoConstante(await hashChave(b.senha), await hashChave(adminSenha))) {
         tent.n++;
@@ -477,7 +479,7 @@ export async function tratar(req, ctx) {
     if (recurso === 'ambientes' && req.metodo === 'POST') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
       const l = await empresa(store, empresaId);
-      const b = lerCorpo(req);
+      const b = await lerCorpo(req);
       const nome = typeof b.nome === 'string' ? b.nome.trim() : '';
       if (!nome || [...nome].length > 40) return resp(400, { erro: 'nome do ambiente deve ter de 1 a 40 caracteres' });
       const cr = await store.ambienteCriar(l.id, nome);
@@ -489,7 +491,7 @@ export async function tratar(req, ctx) {
     if (recurso === 'mesas' && req.metodo === 'POST') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
       const l = await empresa(store, empresaId);
-      const b = lerCorpo(req);
+      const b = await lerCorpo(req);
       const amb = l.ambientes.find((a) => a.nome === b.ambiente);
       if (!amb) return resp(404, { erro: 'ambiente inexistente' });
       if (!Number.isInteger(b.capacidade) || b.capacidade < 1 || b.capacidade > 100) return resp(400, { erro: 'capacidade inválida' });

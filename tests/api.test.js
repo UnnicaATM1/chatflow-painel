@@ -1002,3 +1002,53 @@ test('repositório: reservaCriar rechecando a sobreposição devolve conflito e 
   assert.strictEqual((await s.reservaCriar(entrada(1090, 'k3'))).criada, true);
   assert.strictEqual((await s.reservaListar('empresa_1')).length, 2);
 });
+
+// ---- TASK-006: o corpo só é lido depois de autenticar, com o limite da rota ----
+
+test('corpo: sem token, com chave errada ou em rota inexistente o núcleo não lê o corpo', async () => {
+  const ctx = ctxCom(plataformaNode());
+  const chamadas = [];
+  const req = (metodo, url, token) => ({
+    metodo, url, ip: '127.0.0.1',
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+    lerCorpo: async (limite) => { chamadas.push([metodo, url, limite]); return new TextEncoder().encode('{"nome":"X"}'); },
+  });
+  assert.strictEqual((await nucleoMod.tratar(req('POST', '/empresas'), ctx)).status, 401);
+  assert.strictEqual((await nucleoMod.tratar(req('POST', '/empresas', 'errada'), ctx)).status, 401);
+  assert.strictEqual((await nucleoMod.tratar(req('POST', '/saude'), ctx)).status, 401);
+  assert.strictEqual((await nucleoMod.tratar(req('POST', '/nada', 'ti-bat'), ctx)).status, 404);
+  assert.strictEqual((await nucleoMod.tratar(req('OPTIONS', '/empresas'), ctx)).status, 204);
+  assert.deepStrictEqual(chamadas, [], 'nenhuma leitura de corpo antes de autenticar');
+  // autenticado, a rota que precisa do corpo lê com o limite dela
+  assert.strictEqual((await nucleoMod.tratar(req('POST', '/empresas', 'ti-bat'), ctx)).status, 201);
+  assert.deepStrictEqual(chamadas, [['POST', '/empresas', 512 * 1024]]);
+});
+
+test('corpo: documento de conhecimento usa o limite de 6 MiB; as demais rotas, 512 KiB', async () => {
+  const ctx = ctxCom(plataformaNode());
+  const limites = [];
+  const chamar = (metodo, url, corpo) => nucleoMod.tratar({
+    metodo, url, ip: '127.0.0.1', headers: { authorization: 'Bearer ti-bat' },
+    lerCorpo: async (limite) => { limites.push(limite); return new TextEncoder().encode(JSON.stringify(corpo)); },
+  }, ctx);
+  const e = (await chamar('POST', '/empresas', { nome: 'Lim' })).corpo;
+  await chamar('POST', `/empresas/${e.id}/conhecimento`, { tipo: 'texto', titulo: 't', texto: 'x' });
+  assert.deepStrictEqual(limites, [512 * 1024, 6 * 1024 * 1024]);
+});
+
+test('corpo: pelo servidor Node, 413 com JSON e no limite certo; sem token a resposta é 401 mesmo com corpo enorme', async () => {
+  const { f, fechar } = await subir();
+  const grande = (n) => ({ nome: 'x'.repeat(n) });
+  const a = await f('/empresas', { token: T.cliente, method: 'POST', body: grande(600 * 1024) });
+  assert.strictEqual(a.status, 413);
+  assert.deepStrictEqual(await a.json(), { erro: 'corpo grande demais' });
+  const b = await f('/empresas', { method: 'POST', body: grande(2 * 1024 * 1024) });
+  assert.strictEqual(b.status, 401);
+  // documento de 5 MB em base64 passa do limite comum, mas cabe no de conhecimento
+  const txt = Buffer.concat([Buffer.from('PK', 'latin1'), Buffer.alloc(3 * 1024 * 1024, 1)]).toString('base64');
+  const c = await f('/empresas/empresa_1/conhecimento', { token: T.cliente, method: 'POST', body: { tipo: 'documento', titulo: 'grande', arquivo: { nome: 'g.docx', base64: txt } } });
+  assert.strictEqual(c.status, 201);
+  // o servidor continua atendendo depois de derrubar a conexão do corpo grande
+  assert.strictEqual((await f('/saude')).status, 200);
+  fechar();
+});
