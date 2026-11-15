@@ -18,6 +18,7 @@ const WEB_DIR = path.join(__dirname, '..', 'web');
 const ESTATICOS = {
   'index.html': 'text/html; charset=utf-8',
   'app.js': 'text/javascript; charset=utf-8',
+  'config.js': 'text/javascript; charset=utf-8',
   'bundle.js': 'text/javascript; charset=utf-8',
   'bundle.css': 'text/css; charset=utf-8',
   'tokens.css': 'text/css; charset=utf-8',
@@ -206,8 +207,14 @@ function criarServidor(store, tokens, opcoes = {}) {
       // GET /saude: sem autenticação, só { ok: true }
       if (req.method === 'GET' && req.url.split('?')[0] === '/saude') return responder(res, 200, { ok: true });
       // Front-end estático (sem dados sensíveis), lista fechada de arquivos
-      if (req.method === 'GET' && (req.url === '/app' || req.url.startsWith('/app/'))) {
-        const nome = req.url === '/app' || req.url === '/app/' ? 'index.html' : req.url.slice(5).split('?')[0];
+      const caminhoApp = req.url.split('?')[0];
+      // /app sem barra: o painel usa caminhos relativos, então redireciona para /app/ (preserva a query)
+      if (req.method === 'GET' && caminhoApp === '/app') {
+        res.writeHead(301, { Location: '/app/' + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '') });
+        return res.end();
+      }
+      if (req.method === 'GET' && caminhoApp.startsWith('/app/')) {
+        const nome = caminhoApp === '/app/' ? 'index.html' : caminhoApp.slice(5);
         const tipo = ESTATICOS[nome];
         if (!tipo) return responder(res, 404, { erro: 'arquivo inexistente' });
         const corpo = fs.readFileSync(path.join(WEB_DIR, nome));

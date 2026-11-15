@@ -17,9 +17,9 @@ async function subir(opcoes = {}) {
   const srv = criarServidor(s, T, { adminSenha: 'senha-de-teste', ...opcoes });
   await new Promise((r) => srv.listen(0, r));
   const base = `http://127.0.0.1:${srv.address().port}`;
-  const f = (path, { token, method = 'GET', body, headers = {} } = {}) =>
+  const f = (path, { token, method = 'GET', body, headers = {}, redirect } = {}) =>
     fetch(base + path, {
-      method,
+      method, redirect,
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
       body: body ? JSON.stringify(body) : undefined,
     });
@@ -804,4 +804,24 @@ test('server.js sem KENDJI_DEMO começa vazio: GET /empresas devolve []', async 
 test('server.js com KENDJI_DEMO=1 cria as 3 empresas de demonstração', async () => {
   const lista = await empresasDoServidor({ KENDJI_DEMO: '1' });
   assert.strictEqual(lista.length, 3);
+});
+
+test('GET /app sem barra redireciona 301 para /app/ (preservando a query)', async () => {
+  const { f, fechar } = await subir();
+  const r = await f('/app', { redirect: 'manual' });
+  assert.strictEqual(r.status, 301);
+  assert.strictEqual(r.headers.get('location'), '/app/');
+  const q = await f('/app?x=1', { redirect: 'manual' });
+  assert.strictEqual(q.status, 301);
+  assert.strictEqual(q.headers.get('location'), '/app/?x=1');
+  assert.strictEqual((await f('/app/')).status, 200);
+  fechar();
+});
+
+test('GET /app/config.js é servido como JavaScript', async () => {
+  const { f, fechar } = await subir();
+  const r = await f('/app/config.js');
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.headers.get('content-type'), 'text/javascript; charset=utf-8');
+  fechar();
 });
