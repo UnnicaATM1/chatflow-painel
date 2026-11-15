@@ -1,5 +1,5 @@
 # 🔄 Handoff de Turno — Kendji ONE
-> Última atualização: 2026-11-14 — por: Codex
+> Última atualização: 2026-11-15 — por: Claude Code
 
 ## 📊 Status
 <!-- STATUS_START -->
@@ -22,6 +22,7 @@ Regras deste bloco, sempre seguir:
   ou criada — nunca deixe desatualizado por mais de uma sessão de trabalho.
 
 ## 📍 Onde paramos
+TASK-005 concluída (commits 2141764 a d1f4e7c): `src/` ficou independente do Node e segue rodando em Node (48 testes verdes). Núcleo `tratar(req, ctx)` em `src/nucleo.js`, adaptador Node em `src/node/`, plataforma injetável (`src/plataforma.js`), repositório assíncrono com operações atômicas nomeadas (`src/repositorio.js`, ver `docs/atomicidade.md`), datas em minutos absolutos sem fuso (`src/tempo.js`) e `src/package.json` com `type: module`. Falta só a camada Cloudflare (D1, R2, adaptador `fetch`): seção "Estado depois da TASK-005" em `docs/portabilidade-worker.md`.
 TASK-001 parte 2 concluída: `docs/plano-tela-01.md` documenta layout desktop/celular, componentes existentes, estados, responsividade, passos de implementação e lacunas da tela Atendimento · Conversas.
 README, tokens, componentes/bundle e os dois prints foram lidos; sete componentes citados foram conferidos. Design system preservado.
 Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, personas, PRD, 3 specs SDD), `_reversa_forward/001-agentes-reservas/` e o domínio MVP em `src/` e a API HTTP em `src/api.js`, com 9 testes passando. Persistência real e deploy seguem indefinidos.
@@ -43,7 +44,7 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - [ ] Rastreabilidade por pessoa real: hoje o histórico guarda o papel do token (confiável) e o nome digitado no login (`X-Operador`, só um rótulo); para auditoria forte, emitir um token por usuário
 - [ ] Histórico e reservas vivem em memória; o arquivo `KENDJI_HISTORICO_ARQUIVO` (JSON por linha, horário em UTC) preserva a trilha, mas ao ir para banco migrar o histórico junto e impedir UPDATE/DELETE na tabela
 
-- [ ] Chaves de API: guardar empresa.chave (hash) no banco, não em memória; em produção NÃO definir KENDJI_TOKEN_CHAT (chave global do chat vê todas as empresas); adicionar limite de requisições e HTTPS
+- [ ] Chaves de API: guardar empresa.chave (hash) no banco, não em memória; em produção NÃO definir KENDJI_TOKEN_CHAT (chave global do chat vê todas as empresas); adicionar HTTPS (o limite de requisições já existe, mas em memória por instância)
 - [ ] Remover ou renomear ambiente e remover mesa (hoje só criar); decidir o que fazer com reservas já ligadas a uma mesa removida
 
 - [ ] Exclusão de empresa: trocar a senha do administrador por algo forte (a atual tem 6 caracteres; o bloqueio de 5 erros / 15 min mitiga, mas é fraca) e, quando houver contas, trocar a senha única por login real de administrador; avaliar "restaurar empresa excluída" a partir do instantâneo gravado no histórico
@@ -57,6 +58,8 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - [ ] Publicar o ONE em endereço público (servidor ou túnel): o NicoChat roda na nuvem e não alcança `127.0.0.1`. Depois, testar de verdade o gatilho `#one` ponta a ponta
 
 - [ ] Publicação (decisão do João): o `/sites` só aceita estático ou Worker (ES module com `fetch`), sem processo Node persistente. Para o teste com o NicoChat: API Node em hospedagem que mantém processo ligado (a definir pelo João) e painel `web/` estático no `/sites`. TASK-002 (publicar) BLOQUEADA até o João informar a hospedagem e o endereço; TASK-003 (T01, CONCLUÍDA e validada, 39/39 testes, commits e50ec5b, 36998fd e a639d62): `src/` preparado com package.json, `/saude`, CORS por `KENDJI_CORS_ORIGENS`, rate limit, demo só com `KENDJI_DEMO=1`, `.env.example`, `config.js` na lista estática e redirect de `/app` para `/app/`; TASK-004 (T02): cotar a portabilidade do ONE para Worker (docs/portabilidade-worker.md). Plano completo em `docs/publicacao-sites.md`
+
+- [ ] Camada Cloudflare do ONE (D1 + R2 + adaptador `fetch`): implementar `src/d1/repositorio.js` com a interface de `src/repositorio.js`, guardar os arquivos do conhecimento no R2, escrever o adaptador `Request`/`Response` sobre `tratar()`, limite de requisições compartilhado e fechar as lacunas de atomicidade (desfazer, mudança de reserva + histórico, bloqueio de senha) listadas em `docs/atomicidade.md`. Confirmar se o Sites aceita ESM como está.
 
 ## 🧠 Aprendizados importantes
 - Design system foi montado a partir de 9 telas do Hotel Demonstração (Atendimento, Gestão, Operação, A&B) e do PDF de 10/11/2026; nada veio do código-fonte.
@@ -96,6 +99,10 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 
 - Painel desacoplado da API: `web/config.js` define `window.ONE_CONFIG.apiBase` (vazio = mesma origem). O painel usa caminhos relativos (`tokens.css`, `app.js`, `logo.png`), então roda em `/app/` e em qualquer pasta estática. `/app` sem barra quebraria os assets: o servidor deve redirecionar para `/app/`.
 
+- Arquitetura de `src/` depois da TASK-005: tudo fora de `src/node/` é JavaScript padrão + Web API (um teste falha se aparecer `require(`, `node:`, `Buffer` ou `process.` lá). Serviços recebem o repositório (`store`) e usam só as funções dele, sempre com `await`. `criarStore()` devolve o repositório em memória; `addEmpresa(store, dados)` é async. `src/api.js` só reexporta `criarServidor`; `src/server.js` só importa `src/node/inicializar.js` (variáveis de ambiente, demo, `listen`). Os testes continuam em CommonJS e carregam o ESM com `require` (precisa de Node 20.19 ou mais novo; hoje 24).
+- Datas: `inicio` e `fim` das reservas são minutos absolutos (`minutosAbsolutos(data, horario)`), sem fuso. Data impossível (2026-02-30) ou hora fora de 00:00 a 23:59 agora dá 400 em vez de ser aceita com NaN. `KENDJI_FUSO` existe, mas nenhuma regra compara com "agora" ainda.
+- Teste ponta a ponta local: a porta 3456 costuma estar ocupada por outro servidor do ONE (versão antiga, de outra sessão); suba o seu em outra porta (`PORT=3911`) e mate só o PID que você iniciou.
+
 ## 🚫 Armadilhas conhecidas
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.
 - Não usar travessão em textos para cliente e prompts de agente (regra do README do design system).
@@ -108,6 +115,7 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - Plano tela 01: `docs/plano-01-atendimento-conversas.md` (versão completa com PDF e dados necessários; `docs/plano-tela-01.md` é a primeira versão)
 
 ## 📚 Histórico recente
+- 2026-11-15 — TASK-005: ONE pronto para portar (ESM, plataforma injetável, núcleo `tratar`, adaptador Node, repositório com operações atômicas, datas sem fuso, testes de portabilidade); 48 testes, simulador do NicoChat verificado contra `node src/server.js`
 - 2026-11-14 — TASK-001 reaberta pelo usuário: plano completo em `docs/plano-01-atendimento-conversas.md` (PDF, dados necessários, contratos a definir), validado pelo T001
 - 2026-11-14 — TASK-001 parte 2: plano documental da tela 01 e verificação dos sete componentes citados; sem código ou mudanças no design system
 - 2026-11-14 — TASK-001 parte 1: git init + .gitignore + commit inicial
