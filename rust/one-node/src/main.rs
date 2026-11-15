@@ -296,7 +296,16 @@ async fn main() {
         });
         f
     });
-    let repo = Memoria::nova(Arc::clone(&plat), sink);
+    // KENDJI_IDEMPOTENCIA_HORAS (padrão 24) e KENDJI_IDEMPOTENCIA_MAX (padrão 10000 por empresa): validade e teto das
+    // respostas de idempotência guardadas em memória.
+    let ttl_ms = variavel("KENDJI_IDEMPOTENCIA_HORAS")
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|h| *h > 0.0)
+        .map_or(0, |h| (h * 3_600_000.0) as i64);
+    let max_idem = variavel("KENDJI_IDEMPOTENCIA_MAX")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    let repo = Memoria::nova(Arc::clone(&plat), sink).com_idempotencia(ttl_ms, max_idem);
 
     let mut empresas: Vec<Json> = Vec::new();
     if variavel("KENDJI_DEMO").as_deref() == Some("1") {

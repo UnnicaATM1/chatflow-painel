@@ -130,6 +130,8 @@ pub trait Repositorio: Send + Sync {
         chave: &str,
         resposta: Json,
     ) -> impl Future<Output = ()> + Send;
+    /// Quantas respostas de idempotência a empresa guarda agora (ainda não varridas por validade incluídas).
+    fn idempotencia_tamanho(&self, empresa_id: &str) -> impl Future<Output = usize> + Send;
     /// ATÔMICA: muda pessoas/data/horário/mesa e dados do cliente, rechecando a sobreposição (ignora a própria reserva).
     fn reserva_editar(
         &self,

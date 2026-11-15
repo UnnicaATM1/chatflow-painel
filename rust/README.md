@@ -26,7 +26,7 @@ KENDJI_TOKEN_INTEGRACAO=... PORT=3000 ./target/release/one-node      # no Window
 Mesmas variáveis do servidor em JavaScript: `PORT`, `KENDJI_TOKEN_CHAT`, `KENDJI_TOKEN_CLIENTE`, `KENDJI_TOKEN_INTEGRACAO`,
 `KENDJI_ADMIN_SENHA`, `KENDJI_CORS_ORIGENS`, `KENDJI_CONFIAR_PROXY`, `KENDJI_DEMO`, `KENDJI_HISTORICO_ARQUIVO`,
 `KENDJI_SEMENTE_ARQUIVO` (só testes). A pasta `web/` é achada a partir do diretório atual e dos pais do executável, ou por
-`KENDJI_WEB_DIR`. `KENDJI_FUSO` (padrão `America/Sao_Paulo`) é lida e fica em `Config::fuso`; nenhuma regra usa "agora" ainda. Nome vazio ou com caracteres que um nome de fuso não tem volta ao padrão; como não há banco de fusos no núcleo, um nome bem formado mas inexistente passa (o JavaScript o trocaria pelo padrão). `KENDJI_LIMITE_CHAVE` e `KENDJI_LIMITE_INVALIDAS` mudam os limites de requisição por minuto (padrão 300 e 20).
+`KENDJI_WEB_DIR`. `KENDJI_FUSO` (padrão `America/Sao_Paulo`) é lida e fica em `Config::fuso`; nenhuma regra usa "agora" ainda. Nome vazio ou com caracteres que um nome de fuso não tem volta ao padrão; como não há banco de fusos no núcleo, um nome bem formado mas inexistente passa (o JavaScript o trocaria pelo padrão). `KENDJI_LIMITE_CHAVE` e `KENDJI_LIMITE_INVALIDAS` mudam os limites de requisição por minuto (padrão 300 e 20). `KENDJI_IDEMPOTENCIA_HORAS` e `KENDJI_IDEMPOTENCIA_MAX` mudam a validade e o teto por empresa das respostas de idempotência (padrão 24 h e 10000).
 
 ## Verificar
 
@@ -90,12 +90,28 @@ Por rota (4 s cada, 64 conexões): `/saude` JS 10,7 mil, Rust 12,9 mil; agente J
 Rust 13,1 mil; busca no conhecimento JS 5,3 mil, Rust 8,2 mil; POST de reserva JS 8,2 mil, Rust 7,5 mil. Ou seja, o Rust empata ou
 ganha por rota, exceto no POST de reserva (-9%); na carga mista o JavaScript ficou 17% à frente neste cliente.
 
-**Achado: a memória cresce sem limite sob carga de escrita**, nos dois servidores. No Rust foram 6 MB parados, 61 MB depois de 60 s e
-391 MB depois de 90 s com cerca de 685 mil requisições (~4 MB/s). A causa é o armazenamento de idempotência: cada POST de reserva
-com chave nova guarda a resposta para sempre, inclusive a resposta "indisponivel", que é grande. O JavaScript mostrou o mesmo ritmo
-(56 para 203 MB em 23 s). Em uso real (poucas reservas por minuto) leva meses para pesar, mas um cliente que gere uma chave nova a
-cada tentativa consegue encher a memória. Correção sugerida: validade das chaves (por exemplo 24 h) ou teto de entradas por empresa.
-Não mudei o comportamento porque é decisão de contrato.
+**Memória e idempotência (achado da carga, corrigido na TASK-009).** Antes, cada POST de reserva com chave nova guardava a
+resposta para sempre (inclusive a "indisponivel", que é grande), e a memória crescia ~4 MB/s sob escrita, nos dois servidores.
+Agora as respostas de idempotência **expiram** (24 h, `KENDJI_IDEMPOTENCIA_HORAS`) e têm **teto por empresa** (10000,
+`KENDJI_IDEMPOTENCIA_MAX`); passando do teto, saem as mais antigas. Dentro da validade a mesma chave devolve a resposta idêntica
+(sem reserva duplicada); vencida, a chave é esquecida e o pedido é tratado de novo. O contrato HTTP não mudou (34 de 34 nos dois
+servidores, teste diferencial com 0 diferenças).
+
+Memória do processo Rust (Windows, `tests/carga.js`, 64 conexões):
+
+| Cenário | Antes (sem limite) | Depois |
+|---|---|---|
+| 15 s de carga + 2000 conexões + 8 s | 6 -> 104 MB | 6 -> 104 MB (o teto de 10000 por empresa ainda não foi atingido) |
+| 60 s de carga + 5000 conexões + 30 s | 6 -> **391 MB** | 6 -> **111 MB** (sobe até ~107 MB e fica estável) |
+| 15 s com `KENDJI_IDEMPOTENCIA_MAX=1000` | (não medido) | 6 -> **26 MB**, plano em 25 MB durante os 15 s |
+
+O JavaScript tem o mesmo limite e os mesmos testes, mas o RSS dele depende da coleta de lixo do V8 e não mostra a queda com a
+mesma nitidez (15 s: 56 -> 204 MB com o padrão, 56 -> 137 MB com teto de 1000).
+
+Nota sobre a fase B (conexões simultâneas): neste Windows, 5000 conexões abertas de uma vez às vezes perdem 1 a 3 por esgotamento
+de portas do **cliente** (`EADDRINUSE` por sockets em TIME_WAIT de execuções anteriores; ~15 mil estavam presos). O servidor segue
+vivo e responde depois. Esperando alguns segundos entre execuções, deu 5000 de 5000. `tests/carga.js` agora lista o motivo de cada
+falha (`motivosDasFalhas`).
 
 ## Decisões
 
@@ -112,6 +128,6 @@ Não mudei o comportamento porque é decisão de contrato.
 
 - Só o repositório em memória (como o JavaScript hoje). D1/R2, o adaptador Worker e o painel em Rust ficam para depois.
 - Limite de requisições e bloqueio da senha do administrador seguem em memória por instância.
-- Carga testada por 90 s e 5000 conexões simultâneas, não por horas; a memória sobe com as chaves de idempotência (ver acima).
+- Carga testada por 90 s e 5000 conexões simultâneas, não por horas. A memória fica estável sob escrita contínua graças ao teto de idempotência (ver acima), mas o teto padrão de 10000 por empresa ainda permite ~100 MB com muitas empresas ativas.
 - Compilei para Windows e para wasm32; não para Linux.
 - Diferenças de mensagem em corpo `null` e em `new URL()` com caminhos `..` não foram replicadas (casos que o JavaScript trata por acidente).

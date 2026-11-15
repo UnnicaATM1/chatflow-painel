@@ -4,7 +4,7 @@ use crate::modelo::{Chave, Empresa, Mesa, Modulos, Reserva};
 use crate::plataforma::{Plataforma, iso_ms, uuid};
 use crate::{CriarItem, CriarReserva, Json, Muda, Repositorio};
 use serde_json::Map;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Sumidouro de auditoria: chamado com cada evento de histórico gravado (o adaptador grava em arquivo).
@@ -18,12 +18,68 @@ struct Conh {
     prox: i64,
 }
 
+/// Validade padrão das respostas de idempotência: 24 horas.
+pub const IDEMPOTENCIA_TTL_PADRAO_MS: i64 = 24 * 60 * 60 * 1000;
+/// Teto padrão de respostas de idempotência guardadas por empresa (as mais antigas saem primeiro).
+pub const IDEMPOTENCIA_MAX_PADRAO: usize = 10_000;
+
+/// Respostas de idempotência de uma empresa: o mapa e a fila de gravação (a mais antiga na frente).
+/// Cada gravação leva um número de sequência; a fila pode ter entradas velhas de chaves regravadas, que se
+/// reconhecem por o número não bater com o do mapa. A fila é compactada quando passa do dobro do mapa.
+#[derive(Default)]
+struct Idem {
+    mapa: HashMap<String, (Json, i64, u64)>,
+    fila: VecDeque<(String, u64)>,
+    seq: u64,
+}
+
+impl Idem {
+    /// Resposta guardada, ou `None` se não existe ou já venceu (e então é esquecida).
+    fn obter(&mut self, chave: &str, agora: i64, ttl: i64) -> Option<Json> {
+        let (_, quando, _) = self.mapa.get(chave)?;
+        if agora - quando >= ttl {
+            self.mapa.remove(chave);
+            return None;
+        }
+        self.mapa.get(chave).map(|(r, _, _)| r.clone())
+    }
+
+    /// Guarda a resposta; descarta o que já venceu e, passando do teto, as entradas mais antigas.
+    fn gravar(&mut self, chave: &str, resposta: Json, agora: i64, ttl: i64, max: usize) {
+        self.seq += 1;
+        self.mapa
+            .insert(chave.to_string(), (resposta, agora, self.seq));
+        self.fila.push_back((chave.to_string(), self.seq));
+        while let Some((k, n)) = self.fila.front() {
+            match self.mapa.get(k) {
+                Some((_, _, atual)) if atual != n => {
+                    self.fila.pop_front();
+                }
+                None => {
+                    self.fila.pop_front();
+                }
+                Some((_, quando, _)) if agora - quando >= ttl || self.mapa.len() > max => {
+                    let k = k.clone();
+                    self.mapa.remove(&k);
+                    self.fila.pop_front();
+                }
+                Some(_) => break,
+            }
+        }
+        if self.fila.len() > 2 * self.mapa.len() + 16 {
+            let mapa = &self.mapa;
+            self.fila
+                .retain(|(k, n)| mapa.get(k).is_some_and(|(_, _, atual)| atual == n));
+        }
+    }
+}
+
 #[derive(Default)]
 struct Estado {
     empresas: Vec<Empresa>,
     conhecimento: HashMap<String, Conh>,
     reservas: Vec<Reserva>,
-    idempotencia: HashMap<String, Json>,
+    idempotencia: HashMap<String, Idem>,
     historico: Vec<Json>,
     seq_reserva: i64,
     tent_n: u32,
@@ -34,6 +90,8 @@ pub struct Memoria {
     plat: Arc<dyn Plataforma>,
     sink: Option<Sink>,
     boot: String,
+    ttl_idem: i64,
+    max_idem: usize,
     estado: Mutex<Estado>,
 }
 
@@ -63,8 +121,22 @@ impl Memoria {
             plat,
             sink,
             boot,
+            ttl_idem: IDEMPOTENCIA_TTL_PADRAO_MS,
+            max_idem: IDEMPOTENCIA_MAX_PADRAO,
             estado: Mutex::new(Estado::default()),
         }
+    }
+
+    /// Muda a validade (ms) e o teto por empresa das respostas de idempotência (valores 0 mantêm o padrão).
+    #[must_use]
+    pub fn com_idempotencia(mut self, ttl_ms: i64, max: usize) -> Self {
+        if ttl_ms > 0 {
+            self.ttl_idem = ttl_ms;
+        }
+        if max > 0 {
+            self.max_idem = max;
+        }
+        self
     }
 
     /// O lock nunca atravessa um `.await`; um pânico em outra tarefa não deve derrubar as demais.
@@ -333,9 +405,14 @@ impl Repositorio for Memoria {
         nova: Reserva,
     ) -> CriarReserva {
         let mut est = self.est();
-        let k = chave.map(|c| format!("{empresa_id}:{c}"));
-        if let Some(r) = k.as_ref().and_then(|k| est.idempotencia.get(k)) {
-            return CriarReserva::Repetida(r.clone());
+        let agora = self.plat.agora_ms();
+        if let Some(c) = chave
+            && let Some(r) = est
+                .idempotencia
+                .get_mut(empresa_id)
+                .and_then(|i| i.obter(c, agora, self.ttl_idem))
+        {
+            return CriarReserva::Repetida(r);
         }
         for (mesa, ambiente) in candidatas {
             if est.ocupada(empresa_id, &mesa, nova.inicio, nova.fim, None) {
@@ -357,8 +434,11 @@ impl Repositorio for Memoria {
             resp.insert("ambiente".into(), ambiente.into());
             let resposta = Json::Object(resp);
             est.reservas.push(r.clone());
-            if let Some(k) = k {
-                est.idempotencia.insert(k, resposta.clone());
+            if let Some(c) = chave {
+                est.idempotencia
+                    .entry(empresa_id.to_string())
+                    .or_default()
+                    .gravar(c, resposta.clone(), agora, self.ttl_idem, self.max_idem);
             }
             return CriarReserva::Criada {
                 resposta,
@@ -369,16 +449,27 @@ impl Repositorio for Memoria {
     }
 
     async fn idempotencia_obter(&self, empresa_id: &str, chave: &str) -> Option<Json> {
+        let agora = self.plat.agora_ms();
         self.est()
             .idempotencia
-            .get(&format!("{empresa_id}:{chave}"))
-            .cloned()
+            .get_mut(empresa_id)?
+            .obter(chave, agora, self.ttl_idem)
     }
 
     async fn idempotencia_gravar(&self, empresa_id: &str, chave: &str, resposta: Json) {
+        let agora = self.plat.agora_ms();
         self.est()
             .idempotencia
-            .insert(format!("{empresa_id}:{chave}"), resposta);
+            .entry(empresa_id.to_string())
+            .or_default()
+            .gravar(chave, resposta, agora, self.ttl_idem, self.max_idem);
+    }
+
+    async fn idempotencia_tamanho(&self, empresa_id: &str) -> usize {
+        self.est()
+            .idempotencia
+            .get(empresa_id)
+            .map_or(0, |i| i.mapa.len())
     }
 
     async fn reserva_editar(
@@ -617,8 +708,7 @@ impl Repositorio for Memoria {
         est.empresas.retain(|e| e.id != id);
         est.conhecimento.remove(id);
         est.reservas.retain(|r| r.empresa_id != id);
-        let prefixo = format!("{id}:");
-        est.idempotencia.retain(|k, _| !k.starts_with(&prefixo));
+        est.idempotencia.remove(id);
         self.acrescentar(&mut est, &evento)
     }
 
@@ -642,4 +732,169 @@ pub fn iguais_tempo_constante(a: &str, b: &str) -> bool {
         d |= usize::from(x.get(i).copied().unwrap_or(0) ^ y.get(i).copied().unwrap_or(0));
     }
     d == 0
+}
+
+#[cfg(test)]
+mod testes {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use serde_json::json;
+    use std::future::Future;
+    use std::pin::pin;
+    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::task::{Context, Poll, Waker};
+
+    /// Relógio que o teste move à mão.
+    struct Relogio(AtomicI64);
+
+    impl Plataforma for Relogio {
+        fn agora_ms(&self) -> i64 {
+            self.0.load(Ordering::SeqCst)
+        }
+        fn aleatorio(&self, n: usize) -> Vec<u8> {
+            vec![7; n]
+        }
+    }
+
+    fn bloquear<F: Future>(f: F) -> F::Output {
+        let mut f = pin!(f);
+        let mut cx = Context::from_waker(Waker::noop());
+        loop {
+            if let Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+                return v;
+            }
+        }
+    }
+
+    fn repo(ttl: i64, max: usize) -> (Memoria, Arc<Relogio>) {
+        let r = Arc::new(Relogio(AtomicI64::new(1_000_000)));
+        (Memoria::nova(r.clone(), None).com_idempotencia(ttl, max), r)
+    }
+
+    #[test]
+    fn resposta_vencida_some_e_a_chave_e_esquecida() {
+        let (m, rel) = repo(60_000, 100);
+        bloquear(m.idempotencia_gravar("e1", "k1", json!({ "n": 1 })));
+        rel.0.fetch_add(59_999, Ordering::SeqCst);
+        assert_eq!(
+            bloquear(m.idempotencia_obter("e1", "k1")),
+            Some(json!({ "n": 1 }))
+        );
+        rel.0.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(bloquear(m.idempotencia_obter("e1", "k1")), None);
+        assert_eq!(bloquear(m.idempotencia_tamanho("e1")), 0);
+    }
+
+    #[test]
+    fn gravar_varre_o_que_ja_venceu() {
+        let (m, rel) = repo(1000, 100);
+        for i in 0..50 {
+            bloquear(m.idempotencia_gravar("e1", &format!("k{i}"), json!({ "i": i })));
+        }
+        rel.0.fetch_add(1000, Ordering::SeqCst);
+        bloquear(m.idempotencia_gravar("e1", "nova", json!({ "i": "nova" })));
+        assert_eq!(bloquear(m.idempotencia_tamanho("e1")), 1);
+    }
+
+    #[test]
+    fn teto_por_empresa_e_respeitado_e_as_mais_antigas_saem_primeiro() {
+        let (m, rel) = repo(3_600_000, 3);
+        for i in 1..=5 {
+            rel.0.fetch_add(10, Ordering::SeqCst);
+            bloquear(m.idempotencia_gravar("e1", &format!("k{i}"), json!({ "i": i })));
+        }
+        bloquear(m.idempotencia_gravar("e2", "x", json!({ "x": 1 })));
+        assert_eq!(bloquear(m.idempotencia_tamanho("e1")), 3);
+        assert_eq!(bloquear(m.idempotencia_obter("e1", "k1")), None);
+        assert_eq!(bloquear(m.idempotencia_obter("e1", "k2")), None);
+        for i in 3..=5 {
+            assert_eq!(
+                bloquear(m.idempotencia_obter("e1", &format!("k{i}"))),
+                Some(json!({ "i": i }))
+            );
+        }
+        assert_eq!(
+            bloquear(m.idempotencia_obter("e2", "x")),
+            Some(json!({ "x": 1 })),
+            "o teto é por empresa"
+        );
+        // regravar a chave a torna a mais nova
+        bloquear(m.idempotencia_gravar("e1", "k3", json!({ "i": "3b" })));
+        bloquear(m.idempotencia_gravar("e1", "k6", json!({ "i": 6 })));
+        assert_eq!(
+            bloquear(m.idempotencia_obter("e1", "k3")),
+            Some(json!({ "i": "3b" }))
+        );
+        assert_eq!(bloquear(m.idempotencia_obter("e1", "k4")), None);
+        assert_eq!(bloquear(m.idempotencia_tamanho("e1")), 3);
+    }
+
+    #[test]
+    fn a_fila_nao_cresce_com_a_mesma_chave_regravada() {
+        let (m, _) = repo(3_600_000, 5);
+        for _ in 0..1000 {
+            bloquear(m.idempotencia_gravar("e1", "mesma", json!({ "a": 1 })));
+        }
+        let est = m.est();
+        assert_eq!(est.idempotencia["e1"].mapa.len(), 1);
+        assert!(
+            est.idempotencia["e1"].fila.len() <= 6,
+            "fila: {}",
+            est.idempotencia["e1"].fila.len()
+        );
+    }
+
+    fn nova_reserva(inicio: i64) -> Reserva {
+        Reserva {
+            id: 0,
+            empresa_id: "e1".into(),
+            mesa_id: String::new(),
+            ambiente: String::new(),
+            data: "2026-11-20".into(),
+            horario: "20:00".into(),
+            pessoas: 2,
+            inicio,
+            fim: inicio + 90,
+            status: "confirmada".into(),
+            nome_cliente: None,
+            contato: None,
+        }
+    }
+
+    #[test]
+    fn mesma_chave_dentro_da_validade_repete_a_resposta_identica_e_vencida_e_tratada_de_novo() {
+        let (m, rel) = repo(3_600_000, 100);
+        let cand = vec![("S1".to_string(), "salao".to_string())];
+        let CriarReserva::Criada { resposta, .. } =
+            bloquear(m.reserva_criar("e1", Some("k1"), cand.clone(), nova_reserva(1000)))
+        else {
+            panic!("devia criar")
+        };
+        rel.0.fetch_add(3_599_999, Ordering::SeqCst);
+        let CriarReserva::Repetida(de_novo) =
+            bloquear(m.reserva_criar("e1", Some("k1"), cand.clone(), nova_reserva(1000)))
+        else {
+            panic!("devia repetir")
+        };
+        assert_eq!(de_novo, resposta);
+        assert_eq!(
+            bloquear(m.reserva_listar("e1", None)).len(),
+            1,
+            "sem reserva duplicada"
+        );
+        rel.0.fetch_add(1, Ordering::SeqCst);
+        // vencida: a chave é esquecida e o pedido é tratado de novo (a mesa continua ocupada pela reserva original)
+        assert!(matches!(
+            bloquear(m.reserva_criar("e1", Some("k1"), cand, nova_reserva(1000))),
+            CriarReserva::Conflito
+        ));
+    }
+
+    #[test]
+    fn excluir_a_empresa_apaga_as_respostas_dela() {
+        let (m, _) = repo(60_000, 100);
+        bloquear(m.idempotencia_gravar("e1", "k", json!({ "a": 1 })));
+        bloquear(m.empresa_excluir("e1", json!({ "empresaId": "e1", "acao": "excluida" })));
+        assert_eq!(bloquear(m.idempotencia_tamanho("e1")), 0);
+    }
 }
