@@ -340,6 +340,7 @@ async fn main() {
         .map(str::to_string)
         .collect();
     cfg.confiar_proxy = variavel("KENDJI_CONFIAR_PROXY").as_deref() == Some("1");
+    cfg.fuso = one_core::tempo::fuso_de(std::env::var("KENDJI_FUSO").ok().as_deref());
     let ctx = match Contexto::novo(repo, plat, cfg) {
         Ok(c) => c,
         Err(e) => {

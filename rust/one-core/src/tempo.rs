@@ -2,6 +2,28 @@
 
 use crate::util::{Res, erro};
 
+/// Fuso de negócio padrão (`KENDJI_FUSO` vazio ou inválido).
+pub const FUSO_PADRAO: &str = "America/Sao_Paulo";
+
+/// `KENDJI_FUSO`: nome de fuso IANA (`America/Sao_Paulo`, `UTC`, `Etc/GMT+3`). Valor vazio ou com caracteres que nenhum
+/// nome IANA tem volta ao padrão. Não há banco de fusos no núcleo (seria um `chrono-tz` só para guardar uma string), então
+/// um nome bem formado mas inexistente passa; o JavaScript (que valida com `Intl`) o trocaria pelo padrão.
+/// Hoje nenhuma regra compara reservas com "agora", então o fuso só é carregado e exposto em `Config::fuso`.
+pub fn fuso_de(valor: Option<&str>) -> String {
+    let v = valor.map_or("", str::trim);
+    let valido = !v.is_empty()
+        && v.len() <= 64
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '/'))
+        && !v.starts_with('/')
+        && !v.contains("//");
+    if valido {
+        v.to_string()
+    } else {
+        FUSO_PADRAO.to_string()
+    }
+}
+
 fn bissexto(a: i64) -> bool {
     (a % 4 == 0 && a % 100 != 0) || a % 400 == 0
 }
@@ -64,6 +86,24 @@ mod testes {
             ("x", "10:00"),
         ] {
             assert_eq!(minutos_absolutos(d, h).unwrap_err().codigo, 400, "{d} {h}");
+        }
+    }
+
+    #[test]
+    fn fuso_valido_ou_padrao() {
+        assert_eq!(fuso_de(Some("America/Manaus")), "America/Manaus");
+        assert_eq!(fuso_de(Some("  UTC ")), "UTC");
+        assert_eq!(fuso_de(Some("Etc/GMT+3")), "Etc/GMT+3");
+        for ruim in [
+            None,
+            Some(""),
+            Some("   "),
+            Some("America Sao Paulo"),
+            Some("/etc/passwd"),
+            Some("a//b"),
+            Some("../x;rm"),
+        ] {
+            assert_eq!(fuso_de(ruim), FUSO_PADRAO, "{ruim:?}");
         }
     }
 

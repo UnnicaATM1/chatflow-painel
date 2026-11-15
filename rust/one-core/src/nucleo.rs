@@ -104,6 +104,8 @@ pub struct Config {
     pub cors_origens: Vec<String>,
     /// `KENDJI_CONFIAR_PROXY=1`: usar `X-Forwarded-For`.
     pub confiar_proxy: bool,
+    /// Fuso de negócio (`KENDJI_FUSO`). Carregado e exposto; nenhuma regra o usa ainda.
+    pub fuso: String,
     pub limite_invalidas: u32,
     pub limite_validas: u32,
 }
@@ -115,6 +117,7 @@ impl Config {
             admin_senha: None,
             cors_origens: Vec::new(),
             confiar_proxy: false,
+            fuso: crate::tempo::FUSO_PADRAO.to_string(),
             limite_invalidas: 20,
             limite_validas: 300,
         }

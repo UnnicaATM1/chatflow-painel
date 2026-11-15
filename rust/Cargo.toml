@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["one-store", "one-core", "one-node"]
+members = ["one-store", "one-core", "one-node", "one-wasm-prova"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,0 +1,24 @@
+[package]
+name = "one-wasm-prova"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Prova de que o one-core roda em WebAssembly: exporta `prova()`, que exercita a API de ponta a ponta."
+
+[lib]
+crate-type = ["cdylib"]
+
+# Fora do `[lints] workspace = true` de propósito: exportar uma função C exige `#[unsafe(no_mangle)]`,
+# que o workspace proíbe. Este crate só existe para a prova e não tem outro `unsafe`.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+[dependencies]
+one-core = { path = "../one-core" }
+one-store = { path = "../one-store" }
+serde_json = { version = "1", features = ["preserve_order"] }
