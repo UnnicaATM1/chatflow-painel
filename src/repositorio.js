@@ -15,13 +15,38 @@ function congelar(o) {
 
 const MODULOS_PADRAO = { reservas: true, conhecimento: true };
 
+// Idempotência: as respostas guardadas por chave expiram e têm teto por empresa, para a memória não crescer sem limite.
+export const IDEMPOTENCIA_TTL_PADRAO_MS = 24 * 60 * 60 * 1000; // 24 h
+export const IDEMPOTENCIA_MAX_PADRAO = 10000; // entradas por empresa (as mais antigas saem primeiro)
+
 // opcoes.plat: plataforma (padrão: Web API). opcoes.sink: função chamada com cada evento de histórico gravado
 // (o adaptador Node usa para gravar em arquivo); o núcleo só chama sink(evento).
-export function criarRepositorioMemoria({ plat, sink } = {}) {
+// opcoes.idempotenciaTtlMs / opcoes.idempotenciaMax: validade e teto por empresa das respostas de idempotência.
+export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempotenciaMax } = {}) {
   const p = plat || plataformaWeb();
   const empresas = new Map(); // id -> { id, nome, agente, ambientes, modulos, chave, conhecimento: [], proxConhecimento }
   let reservas = []; // { id, empresaId, mesaId, ambiente, data, horario, pessoas, inicio, fim (minutos absolutos), status, nomeCliente?, contato? }
-  const idempotencia = new Map(); // `${empresaId}:${chave}` -> resposta
+  const ttlIdem = idempotenciaTtlMs > 0 ? idempotenciaTtlMs : IDEMPOTENCIA_TTL_PADRAO_MS;
+  const maxIdem = idempotenciaMax > 0 ? idempotenciaMax : IDEMPOTENCIA_MAX_PADRAO;
+  const idempotencia = new Map(); // empresaId -> Map(chave -> { resposta, quando }), na ordem em que foram gravadas
+  // Resposta guardada para a chave, ou null se não existe ou já passou da validade (e então é esquecida).
+  const idemObter = (empresaId, chave) => {
+    const m = idempotencia.get(empresaId);
+    const e = m && m.get(chave);
+    if (!e) return null;
+    if (p.agora() - e.quando >= ttlIdem) { m.delete(chave); return null; }
+    return e.resposta;
+  };
+  // Guarda a resposta; descarta o que já expirou e, passando do teto, as entradas mais antigas.
+  const idemGravar = (empresaId, chave, resposta) => {
+    let m = idempotencia.get(empresaId);
+    if (!m) { m = new Map(); idempotencia.set(empresaId, m); }
+    const agora = p.agora();
+    m.delete(chave); // regravar a chave a torna a mais nova
+    m.set(chave, { resposta, quando: agora });
+    for (const [k, e] of m) { if (agora - e.quando >= ttlIdem) m.delete(k); else break; }
+    while (m.size > maxIdem) m.delete(m.keys().next().value);
+  };
   const historico = [];
   const boot = p.uuid();
   let seqReserva = 0;
@@ -121,21 +146,23 @@ export function criarRepositorioMemoria({ plat, sink } = {}) {
     //   2) rechecando a sobreposição agora, insere a reserva na primeira candidata livre e guarda a resposta da chave;
     //   3) se todas foram tomadas nesse meio-tempo, devolve { conflito: true } (nada gravado).
     async reservaCriar({ empresaId, chave, candidatas, reserva }) {
-      const k = chave ? `${empresaId}:${chave}` : null;
-      if (k && idempotencia.has(k)) return { criada: false, resposta: idempotencia.get(k) };
+      const antiga = chave ? idemObter(empresaId, chave) : null;
+      if (antiga) return { criada: false, resposta: antiga };
       for (const c of candidatas) {
         if (ocupada(empresaId, c.mesaId, reserva.inicio, reserva.fim)) continue;
         const r = { id: ++seqReserva, empresaId, mesaId: c.mesaId, ambiente: c.ambiente, ...reserva, status: 'confirmada' };
         reservas.push(r);
         const resposta = { status: 'confirmada', reservaId: r.id, mesa: r.mesaId, ambiente: r.ambiente };
-        if (k) idempotencia.set(k, resposta);
+        if (chave) idemGravar(empresaId, chave, resposta);
         return { criada: true, resposta, reserva: r };
       }
       return { conflito: true };
     },
     // Guarda a resposta de uma chave de idempotência (usada para a resposta "indisponivel", que não grava reserva).
-    async idempotenciaObter(empresaId, chave) { return idempotencia.get(`${empresaId}:${chave}`) || null; },
-    async idempotenciaGravar(empresaId, chave, resposta) { idempotencia.set(`${empresaId}:${chave}`, resposta); },
+    async idempotenciaObter(empresaId, chave) { return idemObter(empresaId, chave); },
+    async idempotenciaGravar(empresaId, chave, resposta) { idemGravar(empresaId, chave, resposta); },
+    // Quantas respostas de idempotência a empresa guarda agora (inclui as ainda não varridas por expiração).
+    async idempotenciaTamanho(empresaId) { const m = idempotencia.get(empresaId); return m ? m.size : 0; },
     // ATÔMICA. Muda pessoas/data/horário/mesa de uma reserva confirmada, rechecando a sobreposição. cliente: campos de nome/contato
     // ('' apaga o campo). { ok: true, reserva } | { ok: false, motivo: 'conflito' }
     async reservaEditar({ empresaId, id, dados, cliente }) {
@@ -210,7 +237,7 @@ export function criarRepositorioMemoria({ plat, sink } = {}) {
     async empresaExcluir(id, evento) {
       empresas.delete(id);
       reservas = reservas.filter((r) => r.empresaId !== id);
-      for (const k of [...idempotencia.keys()]) if (k.startsWith(`${id}:`)) idempotencia.delete(k);
+      idempotencia.delete(id);
       return this.historicoAcrescentar(evento);
     },
     // Bloqueio por tentativas erradas da senha do administrador (n erros, bloqueado até `ate` em ms).

@@ -1097,3 +1097,83 @@ test('corpo: pelo servidor Node, 413 com JSON e no limite certo; sem token a res
   assert.strictEqual((await f('/saude')).status, 200);
   fechar();
 });
+
+// ---- TASK-009: idempotência com validade e teto (a memória não cresce sem limite) ----
+
+// Plataforma do Node com relógio controlado pelo teste
+function plataformaRelogio(relogio) {
+  return { ...plataformaNode(), agora: () => relogio.t };
+}
+
+test('idempotência: a resposta expirada some e a chave é esquecida', INTERNO, async () => {
+  const relogio = { t: 1_000_000 };
+  const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 60_000 });
+  await s.idempotenciaGravar('e1', 'k1', { status: 'indisponivel', n: 1 });
+  relogio.t += 59_999;
+  assert.deepStrictEqual(await s.idempotenciaObter('e1', 'k1'), { status: 'indisponivel', n: 1 }, 'ainda vale 1 ms antes de vencer');
+  relogio.t += 1; // 60 s depois da gravação
+  assert.strictEqual(await s.idempotenciaObter('e1', 'k1'), null);
+  assert.strictEqual(await s.idempotenciaTamanho('e1'), 0, 'a entrada vencida foi apagada');
+});
+
+test('idempotência: gravar varre o que já venceu, sem esperar alguém consultar', INTERNO, async () => {
+  const relogio = { t: 5_000_000 };
+  const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 1000 });
+  for (let i = 0; i < 50; i++) await s.idempotenciaGravar('e1', `k${i}`, { i });
+  relogio.t += 1000;
+  await s.idempotenciaGravar('e1', 'nova', { i: 'nova' });
+  assert.strictEqual(await s.idempotenciaTamanho('e1'), 1, 'só a nova ficou');
+});
+
+test('idempotência: o teto por empresa é respeitado e as mais antigas saem primeiro', INTERNO, async () => {
+  const relogio = { t: 1 };
+  const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaMax: 3 });
+  for (let i = 1; i <= 5; i++) { relogio.t += 10; await s.idempotenciaGravar('e1', `k${i}`, { i }); }
+  await s.idempotenciaGravar('e2', 'x', { x: 1 });
+  assert.strictEqual(await s.idempotenciaTamanho('e1'), 3);
+  assert.strictEqual(await s.idempotenciaObter('e1', 'k1'), null);
+  assert.strictEqual(await s.idempotenciaObter('e1', 'k2'), null);
+  for (const i of [3, 4, 5]) assert.deepStrictEqual(await s.idempotenciaObter('e1', `k${i}`), { i });
+  assert.deepStrictEqual(await s.idempotenciaObter('e2', 'x'), { x: 1 }, 'o teto é por empresa: a outra não perde nada');
+  // regravar a chave a torna a mais nova
+  await s.idempotenciaGravar('e1', 'k3', { i: '3b' });
+  await s.idempotenciaGravar('e1', 'k6', { i: 6 });
+  assert.deepStrictEqual(await s.idempotenciaObter('e1', 'k3'), { i: '3b' });
+  assert.strictEqual(await s.idempotenciaObter('e1', 'k4'), null);
+});
+
+test('idempotência: excluir a empresa apaga as respostas guardadas dela', INTERNO, async () => {
+  const s = criarStore();
+  await addEmpresa(s, { id: 'e1', nome: 'E', ambientes: [], agente: {} });
+  await s.idempotenciaGravar('e1', 'k', { a: 1 });
+  await s.empresaExcluir('e1', { empresaId: 'e1', entidade: 'empresa', entidadeId: 'e1', acao: 'excluida', antes: {}, depois: {} });
+  assert.strictEqual(await s.idempotenciaTamanho('e1'), 0);
+});
+
+test('idempotência via HTTP: mesma chave dentro da validade devolve a resposta idêntica; vencida, a chave é esquecida', INTERNO, async () => {
+  const relogio = { t: 2_000_000 };
+  const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 3_600_000 });
+  await addEmpresa(s, { id: 'empresa_1', nome: 'e', ambientes: [{ nome: 'salao', mesas: [{ id: 'S1', capacidade: 4, reservavel: true }] }], agente: {} });
+  const srv = criarServidor(s, T, { agora: () => relogio.t });
+  await new Promise((r) => srv.listen(0, r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const reservar = (chave, extra = {}) => fetch(`${base}/empresas/empresa_1/reservas`, {
+    method: 'POST', headers: { Authorization: `Bearer ${T.chat}`, 'Content-Type': 'application/json', 'Idempotency-Key': chave },
+    body: JSON.stringify({ data: '2026-11-20', horario: '20:00', pessoas: 2, ambiente: 'salao', ...extra }),
+  }).then(async (r) => ({ status: r.status, corpo: await r.json() }));
+
+  const a = await reservar('k1');
+  assert.strictEqual(a.status, 201);
+  relogio.t += 3_599_999;
+  assert.deepStrictEqual(await reservar('k1'), a, 'dentro da validade a resposta é idêntica (mesma reserva, sem duplicar)');
+  assert.strictEqual((await s.reservaListar('empresa_1')).length, 1);
+  // a "indisponivel" também fica guardada e também vence
+  const b = await reservar('k2');
+  assert.strictEqual(b.corpo.status, 'indisponivel');
+  assert.deepStrictEqual(await reservar('k2'), b);
+  relogio.t += 3_600_000;
+  const c = await reservar('k1');
+  assert.strictEqual(c.corpo.status, 'indisponivel', 'vencida, a chave k1 não repete mais a confirmação antiga: o pedido é tratado de novo');
+  assert.strictEqual((await s.reservaListar('empresa_1')).length, 1, 'e a mesa continua ocupada pela reserva original');
+  srv.close();
+});

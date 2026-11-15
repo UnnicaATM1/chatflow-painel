@@ -13,7 +13,14 @@ const sink = arquivoHistorico ? (e) => {
   try { fs.appendFileSync(arquivoHistorico, JSON.stringify(e) + '\n', 'utf8'); }
   catch (err) { console.error('falha ao gravar histórico em arquivo:', err.message); }
 } : null;
-const store = criarStore({ plat: plataformaNode(), sink });
+// KENDJI_IDEMPOTENCIA_HORAS (padrão 24) e KENDJI_IDEMPOTENCIA_MAX (padrão 10000 por empresa): validade e teto das
+// respostas de idempotência guardadas em memória.
+const store = criarStore({
+  plat: plataformaNode(),
+  sink,
+  idempotenciaTtlMs: Number(process.env.KENDJI_IDEMPOTENCIA_HORAS) * 3600 * 1000 || undefined,
+  idempotenciaMax: Number(process.env.KENDJI_IDEMPOTENCIA_MAX) || undefined,
+});
 // As 3 empresas de demonstração só existem com KENDJI_DEMO=1. Em produção o servidor começa vazio.
 const demo = process.env.KENDJI_DEMO === '1';
 for (const n of demo ? [1, 2, 3] : []) {
