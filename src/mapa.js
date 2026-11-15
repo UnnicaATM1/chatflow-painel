@@ -2,15 +2,16 @@
 
 import { empresa } from './agentes.js';
 import { DURACAO_MIN } from './reservas.js';
+import { minutosAbsolutos } from './tempo.js';
 
 function mapa(store, empresaId, data, horario) {
   const l = empresa(store, empresaId);
-  const i = new Date(`${data}T${horario}:00`).getTime();
+  const i = minutosAbsolutos(data, horario);
   return l.ambientes.map((a) => ({
     ambiente: a.nome,
     mesas: a.mesas.map((m) => {
       const r = store.reservas.find(
-        (x) => x.empresaId === empresaId && x.mesaId === m.id && x.status === 'confirmada' && i < x.fim && i + DURACAO_MIN * 60000 > x.inicio
+        (x) => x.empresaId === empresaId && x.mesaId === m.id && x.status === 'confirmada' && i < x.fim && i + DURACAO_MIN > x.inicio
       );
       return {
         id: m.id,

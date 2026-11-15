@@ -1,12 +1,12 @@
 'use strict';
 
 import { empresa } from './agentes.js';
+import { minutosAbsolutos } from './tempo.js';
 
 const DURACAO_MIN = 90;
-const DURACAO_MS = DURACAO_MIN * 60000;
 
 function inicio(data, horario) {
-  return new Date(`${data}T${horario}:00`).getTime();
+  return minutosAbsolutos(data, horario);
 }
 
 function livres(store, l, data, horario, pessoas, ambiente, ignorarId) {
@@ -17,7 +17,7 @@ function livres(store, l, data, horario, pessoas, ambiente, ignorarId) {
     for (const m of amb.mesas) {
       if (!m.reservavel || m.capacidade < pessoas) continue;
       const ocupada = store.reservas.some(
-        (r) => r.id !== ignorarId && r.empresaId === l.id && r.mesaId === m.id && r.status === 'confirmada' && i < r.fim && i + DURACAO_MS > r.inicio
+        (r) => r.id !== ignorarId && r.empresaId === l.id && r.mesaId === m.id && r.status === 'confirmada' && i < r.fim && i + DURACAO_MIN > r.inicio
       );
       if (!ocupada) out.push({ mesa: m, ambiente: amb.nome });
     }
@@ -70,7 +70,7 @@ function reservar(store, { empresaId, data, horario, pessoas, ambiente, mesaId, 
     const ini = inicio(data, horario);
     const r = {
       id: (store.seqReserva = (store.seqReserva || 0) + 1), empresaId, mesaId: mesa.id, ambiente: amb,
-      data, horario, pessoas, inicio: ini, fim: ini + DURACAO_MS, status: 'confirmada', ...cliente,
+      data, horario, pessoas, inicio: ini, fim: ini + DURACAO_MIN, status: 'confirmada', ...cliente,
     };
     store.reservas.push(r);
     res = { status: 'confirmada', reservaId: r.id, mesa: mesa.id, ambiente: amb };
@@ -111,7 +111,7 @@ function editarReserva(store, empresaId, id, mudancas) {
   }
   const ini = inicio(data, horario);
   const cliente = validarCliente(mudancas);
-  Object.assign(r, { pessoas, data, horario, mesaId, ambiente: alvo.ambiente, inicio: ini, fim: ini + DURACAO_MS }, cliente);
+  Object.assign(r, { pessoas, data, horario, mesaId, ambiente: alvo.ambiente, inicio: ini, fim: ini + DURACAO_MIN }, cliente);
   for (const k of Object.keys(cliente)) if (cliente[k] === '') delete r[k];
   return { status: 'atualizada', reserva: publica(r) };
 }
