@@ -3,8 +3,8 @@
 // Contexto completo do agente de uma empresa, pronto para o sistema de conversa:
 // o bloco do agente, os recursos ligados, a base de conhecimento e um prompt montado.
 // Sem travessões nos textos (regra do design system para textos de agente).
-const { lerConfig } = require('./agentes');
-const conhecimento = require('./conhecimento');
+import { lerConfig, empresa } from './agentes.js';
+import * as conhecimento from './conhecimento.js';
 
 // Recursos que a empresa usa e os endereços que o sistema de conversa pode chamar.
 function recursosDe(e) {
@@ -74,7 +74,7 @@ Para reservar: 1) pergunte data, horário, número de pessoas e o ambiente prefe
 }
 
 function contexto(store, empresaId) {
-  const e = require('./agentes').empresa(store, empresaId);
+  const e = empresa(store, empresaId);
   const agente = lerConfig(store, empresaId);
   const itens = e.modulos.conhecimento ? conhecimento.listarPublico(store, empresaId) : [];
   const r = recursosDe(e);
@@ -87,4 +87,4 @@ function contexto(store, empresaId) {
   };
 }
 
-module.exports = { contexto, recursosDe, montarPrompt };
+export { contexto, recursosDe, montarPrompt };

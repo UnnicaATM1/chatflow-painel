@@ -1,7 +1,7 @@
 'use strict';
 
-const { empresa } = require('./agentes');
-const { DURACAO_MIN } = require('./reservas');
+import { empresa } from './agentes.js';
+import { DURACAO_MIN } from './reservas.js';
 
 function mapa(store, empresaId, data, horario) {
   const l = empresa(store, empresaId);
@@ -22,4 +22,4 @@ function mapa(store, empresaId, data, horario) {
   }));
 }
 
-module.exports = { mapa };
+export { mapa };

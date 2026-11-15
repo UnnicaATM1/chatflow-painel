@@ -13,4 +13,4 @@ function addEmpresa(store, { id, nome, agente, ambientes, modulos }) {
   });
 }
 
-module.exports = { criarStore, addEmpresa };
+export { criarStore, addEmpresa };

@@ -2,8 +2,8 @@
 
 // Histórico de modificações: só acrescenta (append-only). Não existe função para alterar ou apagar eventos.
 // Cada evento registra quem (papel do token + operador informado), quando, o quê e antes/depois.
-const fs = require('node:fs');
-const crypto = require('node:crypto');
+import fs from 'node:fs';
+import crypto from 'node:crypto';
 
 const BOOT = crypto.randomUUID();
 
@@ -39,4 +39,4 @@ function listar(store, empresaId, { entidade, entidadeId, limite } = {}) {
     .reverse();
 }
 
-module.exports = { registrar, diff, listar };
+export { registrar, diff, listar };

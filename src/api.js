@@ -1,20 +1,21 @@
 'use strict';
 
-const http = require('node:http');
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const path = require('node:path');
-const { lerConfig, atualizarVarios, empresa } = require('./agentes');
-const { reservar, disponibilidade, editarReserva, cancelarReserva, reativarReserva, publica } = require('./reservas');
-const { registrar, diff, listar } = require('./historico');
-const { addEmpresa } = require('./store');
-const { mapa } = require('./mapa');
-const conhecimento = require('./conhecimento');
-const { contexto, recursosDe } = require('./contexto');
+import http from 'node:http';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { lerConfig, atualizarVarios, empresa } from './agentes.js';
+import { reservar, disponibilidade, editarReserva, cancelarReserva, reativarReserva, publica } from './reservas.js';
+import { registrar, diff, listar } from './historico.js';
+import { addEmpresa } from './store.js';
+import { mapa } from './mapa.js';
+import * as conhecimento from './conhecimento.js';
+import { contexto, recursosDe } from './contexto.js';
 
 const LIMITE_CORPO = 512 * 1024; // 5 campos de texto somam até ~49 mil caracteres
 const LIMITE_CORPO_ARQUIVO = 6 * 1024 * 1024; // documento de até 4 MB em base64
-const WEB_DIR = path.join(__dirname, '..', 'web');
+const WEB_DIR = fileURLToPath(new URL('../web', import.meta.url));
 const ESTATICOS = {
   'index.html': 'text/html; charset=utf-8',
   'app.js': 'text/javascript; charset=utf-8',
@@ -558,4 +559,4 @@ function criarServidor(store, tokens, opcoes = {}) {
   });
 }
 
-module.exports = { criarServidor };
+export { criarServidor };

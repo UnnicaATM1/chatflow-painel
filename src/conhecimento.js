@@ -2,7 +2,7 @@
 
 // Base de conhecimento de uma empresa: itens de texto, tabela (ex.: tabela de preços) e documento.
 // O sistema de conversa lê tudo por GET; a equipe edita pelo painel.
-const { empresa } = require('./agentes');
+import { empresa } from './agentes.js';
 
 const LIM = {
   titulo: 120,
@@ -210,4 +210,4 @@ function buscar(store, empresaId, consulta, limite = 5) {
   return { consulta: q, total: out.length, resultados };
 }
 
-module.exports = { buscar, LIM, TIPOS, criar, editar, excluir, obter, listarPublico, arquivoDe, publica, resumo, achar };
+export { buscar, LIM, TIPOS, criar, editar, excluir, obter, listarPublico, arquivoDe, publica, resumo, achar };

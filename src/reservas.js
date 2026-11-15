@@ -1,6 +1,6 @@
 'use strict';
 
-const { empresa } = require('./agentes');
+import { empresa } from './agentes.js';
 
 const DURACAO_MIN = 90;
 const DURACAO_MS = DURACAO_MIN * 60000;
@@ -139,4 +139,4 @@ function publica({ id, mesaId, ambiente, data, horario, pessoas, status, nomeCli
   return o;
 }
 
-module.exports = { validarCliente, reservar, livres, disponibilidade, editarReserva, cancelarReserva, reativarReserva, publica, DURACAO_MIN };
+export { validarCliente, reservar, livres, disponibilidade, editarReserva, cancelarReserva, reativarReserva, publica, DURACAO_MIN };

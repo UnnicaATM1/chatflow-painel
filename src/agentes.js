@@ -55,4 +55,4 @@ function atualizar(store, empresaId, campo, valor, papel) {
   atualizarVarios(store, empresaId, { [campo]: valor }, papel);
 }
 
-module.exports = { lerConfig, atualizar, atualizarVarios, empresa, LIMITES };
+export { lerConfig, atualizar, atualizarVarios, empresa, LIMITES };

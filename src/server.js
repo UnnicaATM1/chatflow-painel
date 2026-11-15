@@ -2,8 +2,8 @@
 
 // Uso: KENDJI_DEMO=1 KENDJI_TOKEN_CHAT=... KENDJI_TOKEN_CLIENTE=... KENDJI_TOKEN_INTEGRACAO=... node src/server.js
 // Dados de demonstração em memória (as 3 empresas); persistência real fica para a próxima feature.
-const { criarStore, addEmpresa } = require('./store');
-const { criarServidor } = require('./api');
+import { criarStore, addEmpresa } from './store.js';
+import { criarServidor } from './api.js';
 
 const store = criarStore();
 // As 3 empresas de demonstração só existem com KENDJI_DEMO=1. Em produção o servidor começa vazio.
