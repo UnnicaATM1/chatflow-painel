@@ -148,13 +148,63 @@ function validarModulos(b) {
   return { modulos: out };
 }
 
+// Limite de requisições em memória (janela fixa de 1 minuto).
+const JANELA_MS = 60 * 1000;
+function criarLimitador(maximo) {
+  const baldes = new Map(); // chave -> { inicio, n }
+  return {
+    // Conta uma requisição; devolve { ok, retryAfter } (retryAfter em segundos quando bloqueada)
+    contar(chave, agora) {
+      if (baldes.size > 10000) for (const [k, b] of baldes) if (agora - b.inicio >= JANELA_MS) baldes.delete(k);
+      let b = baldes.get(chave);
+      if (!b || agora - b.inicio >= JANELA_MS) { b = { inicio: agora, n: 0 }; baldes.set(chave, b); }
+      b.n++;
+      return b.n <= maximo ? { ok: true } : { ok: false, retryAfter: Math.max(1, Math.ceil((b.inicio + JANELA_MS - agora) / 1000)) };
+    },
+  };
+}
+
+// IP do cliente. Atrás de proxy confiável (KENDJI_CONFIAR_PROXY=1) usa o último valor de X-Forwarded-For (o que o proxy acrescentou).
+function ipDe(req, confiarProxy) {
+  if (confiarProxy) {
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (xff.length) return xff[xff.length - 1];
+  }
+  return req.socket.remoteAddress || 'desconhecido';
+}
+
+const CORS_METODOS = 'GET, POST, PATCH, DELETE, OPTIONS';
+const CORS_CABECALHOS = 'Authorization, Content-Type, Idempotency-Key, X-Operador';
+
 // opcoes.adminSenha: senha do administrador (vem de KENDJI_ADMIN_SENHA). Sem ela, excluir empresa fica desativado.
 function criarServidor(store, tokens, opcoes = {}) {
   if (!tokens || !Object.values(tokens).some(Boolean)) throw new Error('nenhum token configurado');
   const adminSenha = opcoes.adminSenha || null;
+  // opcoes.corsOrigens: lista exata de origens permitidas (KENDJI_CORS_ORIGENS). Vazia: nenhum cabeçalho CORS.
+  const corsOrigens = new Set((opcoes.corsOrigens || []).map((o) => String(o).trim()).filter(Boolean));
+  const confiarProxy = opcoes.confiarProxy === true;
+  const agora = opcoes.agora || Date.now;
+  const limiteInvalidas = criarLimitador(opcoes.limiteInvalidasPorMinuto || 20); // por IP, chave inválida ou ausente
+  const limiteValidas = criarLimitador(opcoes.limitePorChavePorMinuto || 300); // por chave válida
 
   return http.createServer(async (req, res) => {
     try {
+      // CORS: só com a origem na lista exata; nunca "*" nem credenciais
+      if (corsOrigens.size) {
+        res.setHeader('Vary', 'Origin');
+        const origem = req.headers.origin;
+        if (origem && corsOrigens.has(origem)) {
+          res.setHeader('Access-Control-Allow-Origin', origem);
+          if (req.method === 'OPTIONS') {
+            res.setHeader('Access-Control-Allow-Methods', CORS_METODOS);
+            res.setHeader('Access-Control-Allow-Headers', CORS_CABECALHOS);
+            res.setHeader('Access-Control-Max-Age', '600');
+          }
+        }
+        if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+      }
+      // GET /saude: sem autenticação, só { ok: true }
+      if (req.method === 'GET' && req.url.split('?')[0] === '/saude') return responder(res, 200, { ok: true });
       // Front-end estático (sem dados sensíveis), lista fechada de arquivos
       if (req.method === 'GET' && (req.url === '/app' || req.url.startsWith('/app/'))) {
         const nome = req.url === '/app' || req.url === '/app/' ? 'index.html' : req.url.slice(5).split('?')[0];
@@ -165,6 +215,13 @@ function criarServidor(store, tokens, opcoes = {}) {
         return res.end(corpo);
       }
       const auth = autenticar(req, tokens, store);
+      const limite = auth
+        ? limiteValidas.contar(hashChave(req.headers.authorization), agora())
+        : limiteInvalidas.contar(ipDe(req, confiarProxy), agora());
+      if (!limite.ok) {
+        res.setHeader('Retry-After', String(limite.retryAfter));
+        return responder(res, 429, { erro: 'muitas requisições; tente novamente em instantes' });
+      }
       if (!auth) return responder(res, 401, { erro: 'não autenticado' });
       const papel = auth.papel;
 

@@ -7,14 +7,14 @@ const { criarServidor } = require('../src/api');
 
 const T = { chat: 'tc', cliente: 'tcl', integracao: 'ti' };
 
-async function subir() {
+async function subir(opcoes = {}) {
   const s = criarStore();
   addEmpresa(s, {
     id: 'empresa_1', nome: 'empresa_1',
     ambientes: [{ nome: 'salao', mesas: [{ id: 'S1', capacidade: 4, reservavel: true }] }],
     agente: { descricao: 'd', personalidade: '', habilidades: '', produtos: '', restricoes: 'r', editavelPor: { nome: ['cliente', 'integracao'], descricao: ['cliente', 'integracao'], personalidade: ['cliente', 'integracao'], restricoes: ['cliente', 'integracao'] } },
   });
-  const srv = criarServidor(s, T, { adminSenha: 'senha-de-teste' });
+  const srv = criarServidor(s, T, { adminSenha: 'senha-de-teste', ...opcoes });
   await new Promise((r) => srv.listen(0, r));
   const base = `http://127.0.0.1:${srv.address().port}`;
   const f = (path, { token, method = 'GET', body, headers = {} } = {}) =>
@@ -680,4 +680,128 @@ test('reserva guarda nome e contato do cliente vindos do chat', async () => {
   assert.deepStrictEqual(h2[0].antes, { nomeCliente: 'Carlos Lima', contato: '+55 11 90000-0000' });
   assert.deepStrictEqual(h2[0].depois, { nomeCliente: 'Carlos A. Lima' }); // contato apagado: some do "depois"
   fechar();
+});
+
+// ---- publicação: saúde, CORS, limite de requisições e demo por flag ----
+
+test('GET /saude responde 200 { ok: true } sem autenticação', async () => {
+  const { f, fechar } = await subir();
+  const r = await f('/saude');
+  assert.strictEqual(r.status, 200);
+  assert.deepStrictEqual(await r.json(), { ok: true });
+  fechar();
+});
+
+const ORIGEM = 'https://painel.exemplo.com';
+
+test('CORS: origem permitida recebe o cabeçalho, sem "*" e sem credenciais', async () => {
+  const { f, fechar } = await subir({ corsOrigens: [ORIGEM] });
+  const r = await f('/saude', { headers: { Origin: ORIGEM } });
+  assert.strictEqual(r.headers.get('access-control-allow-origin'), ORIGEM);
+  assert.strictEqual(r.headers.get('vary'), 'Origin');
+  assert.strictEqual(r.headers.get('access-control-allow-credentials'), null);
+  fechar();
+});
+
+test('CORS: origem fora da lista não recebe Access-Control-Allow-Origin', async () => {
+  const { f, fechar } = await subir({ corsOrigens: [ORIGEM] });
+  const r = await f('/saude', { headers: { Origin: 'https://outro.com' } });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.headers.get('access-control-allow-origin'), null);
+  const p = await f('/empresas', { method: 'OPTIONS', headers: { Origin: 'https://outro.com' } });
+  assert.strictEqual(p.status, 204);
+  assert.strictEqual(p.headers.get('access-control-allow-origin'), null);
+  assert.strictEqual(p.headers.get('access-control-allow-methods'), null);
+  fechar();
+});
+
+test('CORS: preflight de origem permitida responde 204 com métodos, cabeçalhos e max-age', async () => {
+  const { f, fechar } = await subir({ corsOrigens: [ORIGEM, 'https://b.exemplo.com'] });
+  const r = await f('/empresas/empresa_1/reservas', { method: 'OPTIONS', headers: { Origin: 'https://b.exemplo.com', 'Access-Control-Request-Method': 'POST' } });
+  assert.strictEqual(r.status, 204);
+  assert.strictEqual(r.headers.get('access-control-allow-origin'), 'https://b.exemplo.com');
+  assert.strictEqual(r.headers.get('access-control-allow-methods'), 'GET, POST, PATCH, DELETE, OPTIONS');
+  assert.strictEqual(r.headers.get('access-control-allow-headers'), 'Authorization, Content-Type, Idempotency-Key, X-Operador');
+  assert.strictEqual(r.headers.get('access-control-max-age'), '600');
+  assert.strictEqual(r.headers.get('access-control-allow-credentials'), null);
+  fechar();
+});
+
+test('CORS: sem a variável nenhum cabeçalho CORS é enviado', async () => {
+  const { f, fechar } = await subir();
+  const r = await f('/saude', { headers: { Origin: ORIGEM } });
+  assert.strictEqual(r.headers.get('access-control-allow-origin'), null);
+  assert.strictEqual(r.headers.get('vary'), null);
+  fechar();
+});
+
+test('limite: a 21ª tentativa com chave errada em 1 minuto devolve 429 com Retry-After', async () => {
+  const { f, fechar } = await subir();
+  for (let i = 1; i <= 20; i++) assert.strictEqual((await f('/empresas', { token: 'errada' })).status, 401, `tentativa ${i}`);
+  const r = await f('/empresas', { token: 'errada' });
+  assert.strictEqual(r.status, 429);
+  assert.ok(Number(r.headers.get('retry-after')) >= 1);
+  // chave válida do mesmo IP não é afetada pelo contador de chaves inválidas
+  assert.strictEqual((await f('/empresas', { token: T.integracao })).status, 200);
+  // /saude não entra na conta
+  assert.strictEqual((await f('/saude')).status, 200);
+  fechar();
+});
+
+test('limite: a janela de 1 minuto reinicia a contagem de chaves inválidas', async () => {
+  let t = 1000000;
+  const { f, fechar } = await subir({ agora: () => t });
+  for (let i = 0; i < 20; i++) await f('/empresas', { token: 'errada' });
+  assert.strictEqual((await f('/empresas', { token: 'errada' })).status, 429);
+  t += 60 * 1000;
+  assert.strictEqual((await f('/empresas', { token: 'errada' })).status, 401);
+  fechar();
+});
+
+test('limite: 300 requisições por minuto por chave válida, a 301ª dá 429; outra chave segue livre', async () => {
+  const { f, fechar } = await subir();
+  for (let i = 1; i <= 300; i++) {
+    const s = (await f('/empresas', { token: T.integracao })).status;
+    if (s !== 200) assert.fail(`requisição ${i} devolveu ${s}`);
+  }
+  assert.strictEqual((await f('/empresas', { token: T.integracao })).status, 429);
+  assert.strictEqual((await f('/empresas', { token: T.cliente })).status, 200);
+  fechar();
+});
+
+test('limite: X-Forwarded-For só vale com confiarProxy', async () => {
+  const a = await subir();
+  for (let i = 0; i < 20; i++) await a.f('/empresas', { token: 'errada', headers: { 'X-Forwarded-For': `9.9.9.${i}` } });
+  assert.strictEqual((await a.f('/empresas', { token: 'errada', headers: { 'X-Forwarded-For': '8.8.8.8' } })).status, 429, 'sem proxy confiável o cabeçalho é ignorado');
+  a.fechar();
+  const b = await subir({ confiarProxy: true });
+  for (let i = 0; i < 20; i++) await b.f('/empresas', { token: 'errada', headers: { 'X-Forwarded-For': '1.1.1.1' } });
+  assert.strictEqual((await b.f('/empresas', { token: 'errada', headers: { 'X-Forwarded-For': '1.1.1.1' } })).status, 429);
+  assert.strictEqual((await b.f('/empresas', { token: 'errada', headers: { 'X-Forwarded-For': '2.2.2.2' } })).status, 401, 'outro IP tem contagem própria');
+  b.fechar();
+});
+
+// Sobe src/server.js de verdade (processo filho) e devolve a lista de GET /empresas
+async function empresasDoServidor(extraEnv) {
+  const { spawn } = require('node:child_process');
+  const net = require('node:net');
+  const porta = await new Promise((r) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => r(p)); }); });
+  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PORT: String(porta), KENDJI_TOKEN_INTEGRACAO: 'ti-teste', ...extraEnv };
+  const filho = spawn(process.execPath, [require('node:path').join(__dirname, '..', 'src', 'server.js')], { env, stdio: ['ignore', 'pipe', 'inherit'] });
+  try {
+    await new Promise((ok, err) => { filho.stdout.once('data', ok); filho.once('error', err); filho.once('exit', () => err(new Error('servidor saiu'))); });
+    const r = await fetch(`http://127.0.0.1:${porta}/empresas`, { headers: { Authorization: 'Bearer ti-teste' } });
+    assert.strictEqual(r.status, 200);
+    return await r.json();
+  } finally { filho.kill(); }
+}
+
+test('server.js sem KENDJI_DEMO começa vazio: GET /empresas devolve []', async () => {
+  assert.deepStrictEqual(await empresasDoServidor({}), []);
+  assert.deepStrictEqual(await empresasDoServidor({ KENDJI_DEMO: '0' }), []);
+});
+
+test('server.js com KENDJI_DEMO=1 cria as 3 empresas de demonstração', async () => {
+  const lista = await empresasDoServidor({ KENDJI_DEMO: '1' });
+  assert.strictEqual(lista.length, 3);
 });

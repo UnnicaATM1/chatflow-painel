@@ -1,12 +1,14 @@
 'use strict';
 
-// Uso: KENDJI_TOKEN_CHAT=... KENDJI_TOKEN_CLIENTE=... KENDJI_TOKEN_INTEGRACAO=... node src/server.js
+// Uso: KENDJI_DEMO=1 KENDJI_TOKEN_CHAT=... KENDJI_TOKEN_CLIENTE=... KENDJI_TOKEN_INTEGRACAO=... node src/server.js
 // Dados de demonstração em memória (as 3 empresas); persistência real fica para a próxima feature.
 const { criarStore, addEmpresa } = require('./store');
 const { criarServidor } = require('./api');
 
 const store = criarStore();
-for (const n of [1, 2, 3]) {
+// As 3 empresas de demonstração só existem com KENDJI_DEMO=1. Em produção o servidor começa vazio.
+const demo = process.env.KENDJI_DEMO === '1';
+for (const n of demo ? [1, 2, 3] : []) {
   addEmpresa(store, {
     id: `empresa_${n}`,
     nome: `Empresa ${n}`,
@@ -29,4 +31,9 @@ const tokens = {
 };
 const porta = Number(process.env.PORT) || 3000;
 // KENDJI_ADMIN_SENHA: senha do administrador para excluir empresa. Defina só no ambiente do servidor, nunca no código.
-criarServidor(store, tokens, { adminSenha: process.env.KENDJI_ADMIN_SENHA }).listen(porta, () => console.log(`Kendji ONE API na porta ${porta}`));
+criarServidor(store, tokens, {
+  adminSenha: process.env.KENDJI_ADMIN_SENHA,
+  // KENDJI_CORS_ORIGENS: origens do painel separadas por vírgula (lista exata). KENDJI_CONFIAR_PROXY=1: usar X-Forwarded-For.
+  corsOrigens: (process.env.KENDJI_CORS_ORIGENS || '').split(','),
+  confiarProxy: process.env.KENDJI_CONFIAR_PROXY === '1',
+}).listen(porta, () => console.log(`Kendji ONE API na porta ${porta}`));
