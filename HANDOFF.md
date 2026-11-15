@@ -61,6 +61,8 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 
 - [ ] Camada Cloudflare do ONE (D1 + R2 + adaptador `fetch`): implementar `src/d1/repositorio.js` com a interface de `src/repositorio.js`, guardar os arquivos do conhecimento no R2, escrever o adaptador `Request`/`Response` sobre `tratar()`, limite de requisições compartilhado e fechar as lacunas de atomicidade (desfazer, mudança de reserva + histórico, bloqueio de senha) listadas em `docs/atomicidade.md`. Confirmar se o Sites aceita ESM como está.
 
+- [ ] Rust (decisão do João: o ONE deve ser todo em Rust; a stack em Node foi escolha minha sem confirmar, o projeto não tinha stack definida): TASK-007 com o T01, fase 1 = só a API em `rust/` (crates one-core, one-store, one-node), guiada por `docs/migracao-rust.md`. Premissas assumidas porque o João não respondeu ao escopo: painel em Rust (Leptos/Dioxus) só na fase 2 com OK dele; o JavaScript atual segue intocado e rodando o teste do NicoChat; a versão Rust só substitui quando passar nos testes de contrato HTTP (os 51 testes de `tests/` viram independentes da implementação). Confirmar com o João: alcance (API só ou API e painel), e se o destino final é o Worker do Sites (workers-rs)
+
 ## 🧠 Aprendizados importantes
 - Design system foi montado a partir de 9 telas do Hotel Demonstração (Atendimento, Gestão, Operação, A&B) e do PDF de 10/11/2026; nada veio do código-fonte.
 - Paleta: moldura navy, trabalho claro, ciano (`brand-500`) só para ação; fontes Inter (UI), JetBrains Mono (números) e Fraunces (documentos).
