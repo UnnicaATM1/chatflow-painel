@@ -2,10 +2,6 @@
 
 // Histórico de modificações: só acrescenta (append-only). Não existe função para alterar ou apagar eventos.
 // Cada evento registra quem (papel do token + operador informado), quando, o quê e antes/depois.
-import fs from 'node:fs';
-import crypto from 'node:crypto';
-
-const BOOT = crypto.randomUUID();
 
 function congelar(o) {
   if (o && typeof o === 'object') { Object.values(o).forEach(congelar); Object.freeze(o); }
@@ -13,12 +9,9 @@ function congelar(o) {
 }
 
 function registrar(store, ev) {
-  const e = congelar({ seq: store.historico.length + 1, boot: BOOT, quando: new Date().toISOString(), ...JSON.parse(JSON.stringify(ev)) });
+  const e = congelar({ seq: store.historico.length + 1, boot: store.boot, quando: new Date(store.plat.agora()).toISOString(), ...JSON.parse(JSON.stringify(ev)) });
   store.historico.push(e);
-  if (store.historicoArquivo) {
-    try { fs.appendFileSync(store.historicoArquivo, JSON.stringify(e) + '\n', 'utf8'); }
-    catch (err) { console.error('falha ao gravar histórico em arquivo:', err.message); }
-  }
+  if (store.sink) store.sink(e); // sumidouro de auditoria injetado pelo adaptador (arquivo, fila...); o núcleo só chama sink(evento)
   return e;
 }
 

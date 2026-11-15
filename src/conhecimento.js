@@ -23,7 +23,7 @@ const EXT = {
   txt: { mime: 'text/plain; charset=utf-8', texto: true },
   md: { mime: 'text/plain; charset=utf-8', texto: true },
   csv: { mime: 'text/plain; charset=utf-8', texto: true },
-  pdf: { mime: 'application/pdf', magic: (b) => b.length > 4 && b.subarray(0, 4).toString('latin1') === '%PDF' },
+  pdf: { mime: 'application/pdf', magic: (b) => b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46 },
   docx: { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', magic: (b) => b.length > 4 && b[0] === 0x50 && b[1] === 0x4b },
   xlsx: { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', magic: (b) => b.length > 4 && b[0] === 0x50 && b[1] === 0x4b },
 };
@@ -56,7 +56,7 @@ function validarTabela(t) {
   return { colunas, linhas };
 }
 
-function lerArquivo(a) {
+function lerArquivo(store, a) {
   if (!a || typeof a !== 'object' || typeof a.nome !== 'string' || typeof a.base64 !== 'string') throw erro('arquivo deve ter nome e base64', 400);
   const nome = a.nome.split(/[\\/]/).pop().replace(/[\u0000-\u001f]/g, '').trim();
   if (!nome || tam(nome) > LIM.nomeArquivo) throw erro(`nome do arquivo deve ter de 1 a ${LIM.nomeArquivo} caracteres`, 400);
@@ -66,13 +66,13 @@ function lerArquivo(a) {
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(a.base64)) throw erro('base64 inválido', 400);
   const estimado = Math.floor((a.base64.length * 3) / 4);
   if (estimado > LIM.arquivoBytes + 2) throw erro(`arquivo passa do limite de ${LIM.arquivoBytes / 1024 / 1024} MB`, 400);
-  const buffer = Buffer.from(a.base64, 'base64');
+  const buffer = store.plat.base64Decodificar(a.base64);
   if (buffer.length === 0) throw erro('arquivo vazio', 400);
   if (buffer.length > LIM.arquivoBytes) throw erro(`arquivo passa do limite de ${LIM.arquivoBytes / 1024 / 1024} MB`, 400);
   if (regra.magic && !regra.magic(buffer)) throw erro(`o conteúdo não corresponde a um arquivo .${ext}`, 400);
   let extraido;
   if (regra.texto) {
-    extraido = buffer.toString('utf8');
+    extraido = new TextDecoder('utf-8', { ignoreBOM: true }).decode(buffer);
     if (extraido.includes('\u0000')) throw erro('o arquivo não parece ser texto', 400);
     if (tam(extraido) > LIM.textoDoc) throw erro(`o texto do arquivo passa do limite de ${LIM.textoDoc} caracteres`, 400);
   }
@@ -121,12 +121,12 @@ function criar(store, empresaId, dados) {
   if (!dados || typeof dados !== 'object') throw erro('corpo inválido', 400);
   if (e.conhecimento.length >= LIM.itens) throw erro(`limite de ${LIM.itens} itens de conhecimento por empresa`, 400);
   if (!TIPOS.includes(dados.tipo)) throw erro(`tipo deve ser um de: ${TIPOS.join(', ')}`, 400);
-  const agora = new Date().toISOString();
+  const agora = new Date(store.plat.agora()).toISOString();
   const item = { id: e.proxConhecimento, titulo: texto(dados.titulo, 'título', LIM.titulo, true).trim(), tipo: dados.tipo, criadoEm: agora, atualizadoEm: agora };
   if (dados.tipo === 'texto') item.texto = texto(dados.texto, 'texto', LIM.texto, true);
   if (dados.tipo === 'tabela') item.tabela = validarTabela(dados.tabela);
   if (dados.tipo === 'documento') {
-    const l = lerArquivo(dados.arquivo);
+    const l = lerArquivo(store, dados.arquivo);
     item.arquivo = l.arquivo;
     if (l.texto !== undefined) item.texto = l.texto;
   }
@@ -144,12 +144,12 @@ function editar(store, empresaId, id, dados) {
   if (item.tipo === 'texto' && dados.texto !== undefined) novo.texto = texto(dados.texto, 'texto', LIM.texto, true);
   if (item.tipo === 'tabela' && dados.tabela !== undefined) novo.tabela = validarTabela(dados.tabela);
   if (item.tipo === 'documento' && dados.arquivo !== undefined) {
-    const l = lerArquivo(dados.arquivo);
+    const l = lerArquivo(store, dados.arquivo);
     novo.arquivo = l.arquivo;
     novo.texto = l.texto; // pode ser undefined (pdf/docx/xlsx): limpa o texto do arquivo anterior
   }
   if (Object.keys(novo).length === 0) throw erro('nenhuma alteração informada', 400);
-  Object.assign(item, novo, { atualizadoEm: new Date().toISOString() });
+  Object.assign(item, novo, { atualizadoEm: new Date(store.plat.agora()).toISOString() });
   if (item.tipo === 'documento' && item.texto === undefined) delete item.texto;
   return item;
 }
@@ -163,7 +163,7 @@ function excluir(store, empresaId, id) {
 function arquivoDe(store, empresaId, id) {
   const { item } = achar(store, empresaId, id);
   if (!item.arquivo) throw erro('este item não tem arquivo', 404);
-  return { nome: item.arquivo.nome, mime: item.arquivo.mime, buffer: Buffer.from(item.arquivo.base64, 'base64') };
+  return { nome: item.arquivo.nome, mime: item.arquivo.mime, buffer: store.plat.base64Decodificar(item.arquivo.base64) };
 }
 
 

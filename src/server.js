@@ -4,8 +4,16 @@
 // Dados de demonstração em memória (as 3 empresas); persistência real fica para a próxima feature.
 import { criarStore, addEmpresa } from './store.js';
 import { criarServidor } from './api.js';
+import fs from 'node:fs';
+import { plataformaNode } from './node/plataforma.js';
 
-const store = criarStore();
+// KENDJI_HISTORICO_ARQUIVO: grava cada evento de histórico (JSON por linha) neste arquivo, além da memória.
+const arquivoHistorico = process.env.KENDJI_HISTORICO_ARQUIVO || null;
+const sink = arquivoHistorico ? (e) => {
+  try { fs.appendFileSync(arquivoHistorico, JSON.stringify(e) + '\n', 'utf8'); }
+  catch (err) { console.error('falha ao gravar histórico em arquivo:', err.message); }
+} : null;
+const store = criarStore({ plat: plataformaNode(), sink });
 // As 3 empresas de demonstração só existem com KENDJI_DEMO=1. Em produção o servidor começa vazio.
 const demo = process.env.KENDJI_DEMO === '1';
 for (const n of demo ? [1, 2, 3] : []) {
