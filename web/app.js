@@ -59,13 +59,15 @@
     var sp = useState('2'), pessoas = sp[0], setPessoas = sp[1];
     var sv = useState(null), disp = sv[0], setDisp = sv[1];
     var sm = useState(''), msg = sm[0], setMsg = sm[1];
+    var sn = useState(''), nomeCli = sn[0], setNomeCli = sn[1];
+    var sc2 = useState(''), contatoCli = sc2[0], setContatoCli = sc2[1];
     function consultar() {
       setMsg(''); setDisp(null);
       api(p.token, 'GET', '/empresas/' + encodeURIComponent(p.empresa) + '/disponibilidade?data=' + data + '&horario=' + hora + '&pessoas=' + Number(pessoas))
         .then(setDisp).catch(function (e) { setMsg(e.message); });
     }
     function reservar(mesaId) {
-      api(p.token, 'POST', '/empresas/' + encodeURIComponent(p.empresa) + '/reservas', { data: data, horario: hora, pessoas: Number(pessoas), mesaId: mesaId, chave: chaveNova() })
+      api(p.token, 'POST', '/empresas/' + encodeURIComponent(p.empresa) + '/reservas', { data: data, horario: hora, pessoas: Number(pessoas), mesaId: mesaId, chave: chaveNova(), nomeCliente: nomeCli.trim() || undefined, contato: contatoCli.trim() || undefined })
         .then(function (r) {
           if (r.status === 'confirmada') { setMsg('Reserva confirmada na mesa ' + r.mesa + '.'); setDisp(null); p.aoReservar(data); }
           else { setMsg('Mesa já reservada. Disponibilidade atualizada.'); setDisp({ ambientes: r.disponibilidade }); }
@@ -79,6 +81,9 @@
         h('input', { type: 'time', value: hora, 'aria-label': 'Horário da reserva', onChange: function (e) { setHora(e.target.value); setDisp(null); } }),
         h('input', { type: 'number', min: 1, value: pessoas, style: { width: 80 }, 'aria-label': 'Pessoas', onChange: function (e) { setPessoas(e.target.value); setDisp(null); } }),
         h(K.Button, { onClick: consultar }, 'Ver disponibilidade')),
+      h('div', { className: 'k1-row' },
+        h('input', { type: 'text', value: nomeCli, maxLength: 80, placeholder: 'Nome do cliente (opcional)', 'aria-label': 'Nome do cliente', style: { minWidth: 220 }, onChange: function (e) { setNomeCli(e.target.value); } }),
+        h('input', { type: 'text', value: contatoCli, maxLength: 40, placeholder: 'Telefone ou e-mail (opcional)', 'aria-label': 'Contato do cliente', style: { minWidth: 220 }, onChange: function (e) { setContatoCli(e.target.value); } })),
       msg && h('div', { role: 'status', className: /confirmada/.test(msg) ? 'rotulo' : 'erro' }, msg),
       disp && total === 0 && h(K.EmptyState, null, 'Sem mesa livre neste horário para ' + pessoas + ' pessoas.'),
       disp && total > 0 && disp.ambientes.map(function (a) {
@@ -120,13 +125,14 @@
           r.pessoas,
           ativa && h(K.Button, { variant: 'secondary', 'aria-label': 'Adicionar uma pessoa', onClick: function () { enviar('PATCH', { pessoas: r.pessoas + 1 }); } }, '+'))),
         h('td', null, r.ambiente), h('td', { className: 'mono' }, r.mesaId),
+        h('td', null, r.nomeCliente ? h('span', null, r.nomeCliente, r.contato && h('span', { className: 'rotulo', style: { display: 'block' } }, r.contato)) : h('span', { style: { color: 'var(--ink-muted)' } }, '—')),
         h('td', null, h('span', { className: 'k1-pill k1-pill-' + (ativa ? 'concluida' : 'pendente') }, ativa ? 'Confirmada' : 'Cancelada')),
         h('td', null, h('span', { className: 'k1-row', style: { gap: 4 } },
           ativa && h(K.Button, { variant: 'secondary', onClick: function () { setAberto(!aberto); if (!aberto) consultar({}); } }, 'Editar'),
           ativa && h(K.Button, { variant: 'danger', onClick: function () { enviar('DELETE'); } }, 'Cancelar'),
           !ativa && h(K.Button, { variant: 'primary', onClick: function () { enviar('PATCH', { status: 'confirmada' }); } }, 'Reativar')))),
-      (msg && !aberto) && h('tr', null, h('td', { colSpan: 6, className: 'erro', role: 'alert' }, msg)),
-      aberto && h('tr', null, h('td', { colSpan: 6 }, h('div', { className: 'k1-stack', style: { padding: '8px 0' } },
+      (msg && !aberto) && h('tr', null, h('td', { colSpan: 7, className: 'erro', role: 'alert' }, msg)),
+      aberto && h('tr', null, h('td', { colSpan: 7 }, h('div', { className: 'k1-stack', style: { padding: '8px 0' } },
         h('div', { className: 'k1-row' },
           h('input', { type: 'date', value: f.data, 'aria-label': 'Nova data', onChange: function (e) { consultar({ data: e.target.value }); } }),
           h('input', { type: 'time', value: f.horario, 'aria-label': 'Novo horário', onChange: function (e) { consultar({ horario: e.target.value }); } }),
@@ -157,7 +163,7 @@
       erro && h('div', { className: 'erro', role: 'alert' }, erro),
       lista && lista.length === 0 && h(K.EmptyState, null, 'Nenhuma reserva em ' + br(data) + '. Elas chegam pelo chat do agente.'),
       lista && lista.length > 0 && h('table', null,
-        h('thead', null, h('tr', null, ['Horário', 'Pessoas', 'Ambiente', 'Mesa', 'Situação', 'Ações'].map(function (c) { return h('th', { key: c }, c); }))),
+        h('thead', null, h('tr', null, ['Horário', 'Pessoas', 'Ambiente', 'Mesa', 'Cliente', 'Situação', 'Ações'].map(function (c) { return h('th', { key: c }, c); }))),
         h('tbody', null, lista.slice().sort(function (a, b) { return a.horario < b.horario ? -1 : 1; }).map(function (r) {
           return h(LinhaReserva, { key: r.id + r.horario + r.pessoas + r.mesaId + r.status, r: r, token: p.token, empresa: p.empresa, recarregar: function () { setRecarga(recarga + 1); } });
         }))));
@@ -199,7 +205,9 @@
           mesa.reserva
             ? h('div', { className: 'k1-stack' }, h('span', { className: 'k1-pill k1-pill-concluida' }, 'Confirmada'),
               h('div', null, 'Horário: ', h('b', { className: 'mono' }, mesa.reserva.horario)), h('div', null, 'Pessoas: ', h('b', { className: 'mono' }, mesa.reserva.pessoas)),
-              h('div', null, 'Situação: ', h('b', null, mesa.reserva.status)))
+              h('div', null, 'Situação: ', h('b', null, mesa.reserva.status)),
+              mesa.reserva.nomeCliente && h('div', null, 'Cliente: ', h('b', null, mesa.reserva.nomeCliente)),
+              mesa.reserva.contato && h('div', null, 'Contato: ', h('b', { className: 'mono' }, mesa.reserva.contato)))
             : h('div', null, 'Livre neste horário.'))));
   }
 
@@ -715,6 +723,13 @@
         description: 'Traz do ONE o contexto completo do agente (nome, descrição, personalidade, habilidades, produtos, restrições, base de conhecimento) e um prompt de sistema pronto em `prompt`. Chame uma vez no início da conversa.',
         parameters: { type: 'object', properties: {}, required: [] },
       }];
+      if (mod.conhecimento) {
+        lista.push({
+          name: 'one_buscar_conhecimento', method: 'GET', url: o + '/empresas/' + id + '/conhecimento/buscar?q={{consulta}}', headers: auth,
+          description: 'Busca na base de conhecimento a informação que o cliente pediu (tabela de preços, horários, pagamento, regras). Devolve só o que interessa. Responda apenas com o que vier; se não vier nada, diga que vai confirmar com a equipe.',
+          parameters: { type: 'object', properties: { consulta: { type: 'string', description: 'O assunto da pergunta, com as palavras do cliente (codificar para URL)' } }, required: ['consulta'] },
+        });
+      }
       if (mod.reservas) {
         lista.push({
           name: 'one_disponibilidade', method: 'GET', url: o + '/empresas/' + id + '/disponibilidade?data={{data}}&horario={{horario}}&pessoas={{pessoas}}', headers: auth,
@@ -724,8 +739,8 @@
         lista.push({
           name: 'one_reservar', method: 'POST', url: o + '/empresas/' + id + '/reservas', headers: Object.assign({ 'Content-Type': 'application/json', 'Idempotency-Key': '{{uuid_da_reserva}}' }, auth),
           description: "Registra a reserva. Só confirme ao cliente se a resposta tiver status 'confirmada'. Reenvie a MESMA Idempotency-Key se precisar repetir a chamada.",
-          parameters: { type: 'object', properties: { data: { type: 'string' }, horario: { type: 'string' }, pessoas: { type: 'integer', minimum: 1 }, mesaId: { type: 'string', description: 'opcional' }, ambiente: { type: 'string', description: 'opcional' } }, required: ['data', 'horario', 'pessoas'] },
-          body: { data: '{{data}}', horario: '{{horario}}', pessoas: '{{pessoas}}', mesaId: '{{mesaId}}', ambiente: '{{ambiente}}' },
+          parameters: { type: 'object', properties: { data: { type: 'string' }, horario: { type: 'string' }, pessoas: { type: 'integer', minimum: 1 }, mesaId: { type: 'string', description: 'opcional' }, ambiente: { type: 'string', description: 'opcional' }, nomeCliente: { type: 'string', description: 'nome do cliente (envie sempre que tiver)' }, contato: { type: 'string', description: 'telefone ou e-mail do cliente (envie sempre que tiver)' } }, required: ['data', 'horario', 'pessoas'] },
+          body: { data: '{{data}}', horario: '{{horario}}', pessoas: '{{pessoas}}', mesaId: '{{mesaId}}', ambiente: '{{ambiente}}', nomeCliente: '{{contato.nome}}', contato: '{{contato.telefone}}' },
         });
       }
       return lista;
@@ -770,11 +785,12 @@
         h('h2', null, 'Conectar ao NicoChat (fluxo ONE)'),
         h('div', { className: 'rotulo' }, 'Uma cópia do fluxo por empresa, cada uma com a chave desta empresa.'),
         h('div', { className: 'k1-stack', style: { background: 'var(--surface-sunken)', border: '1px solid var(--border-strong)', borderRadius: 8, padding: 12 } },
-          h('div', null, h('b', null, 'Gatilho: '), 'mensagem que começa com ', h('code', { className: 'mono' }, '#one'), ' (sem diferenciar maiúsculas).'),
+          h('div', null, h('b', null, 'Gatilho: '), 'toda conversa nova do cliente. (Para testar à mão, dá para usar uma mensagem com ', h('code', { className: 'mono' }, '#one'), '.)'),
           h('ol', { style: { margin: 0, paddingLeft: 20, fontSize: 13, color: 'var(--ink-muted)' } },
-            h('li', null, 'O fluxo chama one_contexto e recebe o prompt do agente pronto.'),
+            h('li', null, 'No início de toda conversa, o fluxo chama one_contexto e recebe o prompt do agente pronto.'),
             h('li', null, 'A IA do NicoChat responde ao cliente usando esse prompt.'),
-            mod.reservas && h('li', null, 'Para reservas, a IA chama one_disponibilidade e depois one_reservar.'))),
+            mod.conhecimento && h('li', null, 'Se o cliente pergunta preço, horário ou regra, a IA chama one_buscar_conhecimento.'),
+            mod.reservas && h('li', null, 'Se quer reservar, a IA chama one_disponibilidade e depois one_reservar (com nome e contato do cliente).'))),
         h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, 'Endereço público do ONE (o NicoChat precisa conseguir acessar)'),
           h('input', { type: 'text', value: origem, 'aria-label': 'Endereço público do ONE', style: { maxWidth: 460 }, onChange: function (e) { setOrigem(e.target.value); } })),
         privado && h('div', { className: 'erro', role: 'alert' }, 'Este endereço só existe neste computador: o NicoChat, que roda na nuvem, não consegue chamá-lo. Use o endereço público do ONE (servidor ou túnel) antes de configurar o fluxo.'),

@@ -584,3 +584,100 @@ test('contexto do agente em uma chamada, com prompt pronto', async () => {
   assert.strictEqual((await f('/empresas/empresa_1/contexto')).status, 401);
   fechar();
 });
+
+test('busca no conhecimento devolve só o que o cliente perguntou', async () => {
+  const { f, fechar } = await subir();
+  const json = (caminho, metodo, corpo, token = T.cliente) => f(caminho, { token, method: metodo, body: corpo });
+  const k = await (await json('/empresas/empresa_1/api/chave', 'POST', {}, T.integracao)).json();
+  const base = '/empresas/empresa_1/conhecimento';
+  await json(base, 'POST', { tipo: 'tabela', titulo: 'Preços dos pratos', tabela: { colunas: ['Prato', 'Preço'], linhas: [['Lasanha à bolonhesa', 'R$ 52,00'], ['Risoto de cogumelos', 'R$ 64,00'], ['Tiramisù', 'R$ 28,00']] } });
+  await json(base, 'POST', { tipo: 'texto', titulo: 'Horário de funcionamento', texto: 'Abrimos de terça a domingo, das 18h às 23h30.\nTolerância de atraso de 15 minutos.\nNão aceitamos cheque.' });
+  await json(base, 'POST', { tipo: 'documento', titulo: 'Regras da casa', arquivo: { nome: 'regras.txt', base64: Buffer.from('Crianças são bem-vindas.\nAnimais de estimação só na área externa.').toString('base64') } });
+  await json(base, 'POST', { tipo: 'documento', titulo: 'Cardápio de vinhos', arquivo: { nome: 'vinhos.pdf', base64: Buffer.from('%PDF-1.4 x').toString('base64') } });
+  const buscar = async (q, token = k.chave) => (await f(`${base}/buscar?q=${encodeURIComponent(q)}`, { token })).json();
+
+  // tabela: só as linhas que casam (com acento e pergunta em linguagem natural)
+  const preco = await buscar('Quanto custa a lasanha?');
+  assert.strictEqual(preco.resultados[0].tipo, 'tabela');
+  assert.deepStrictEqual(preco.resultados[0].colunas, ['Prato', 'Preço']);
+  assert.deepStrictEqual(preco.resultados[0].linhas, [['Lasanha à bolonhesa', 'R$ 52,00']]);
+  assert.strictEqual(preco.resultados[0].parcial, true);
+  // sem acento, plural e maiúsculas
+  assert.deepStrictEqual((await buscar('RISOTOS')).resultados[0].linhas, [['Risoto de cogumelos', 'R$ 64,00']]);
+  // pelo título: devolve a tabela inteira
+  assert.strictEqual((await buscar('precos')).resultados[0].linhas.length, 3);
+  // texto: só os parágrafos que casam
+  const hor = await buscar('aceita cheque?');
+  assert.deepStrictEqual(hor.resultados[0].trechos, ['Não aceitamos cheque.']);
+  assert.deepStrictEqual((await buscar('tolerancia atraso')).resultados[0].trechos, ['Tolerância de atraso de 15 minutos.']);
+  // documento com texto extraído e link; documento sem texto aparece pelo título
+  const regras = (await buscar('animais')).resultados[0];
+  assert.deepStrictEqual([regras.titulo, regras.trechos], ['Regras da casa', ['Animais de estimação só na área externa.']]);
+  assert.strictEqual(regras.arquivo.url, `${base}/3/arquivo`);
+  const vinhos = (await buscar('vinhos')).resultados[0];
+  assert.deepStrictEqual([vinhos.titulo, vinhos.tipo, vinhos.arquivo.nome], ['Cardápio de vinhos', 'documento', 'vinhos.pdf']);
+  // nada encontrado e pergunta genérica
+  assert.deepStrictEqual(await buscar('helicóptero'), { consulta: 'helicóptero', total: 0, resultados: [] });
+  const geral = await buscar('o que vocês têm?');
+  assert.strictEqual(geral.catalogo, true);
+  assert.deepStrictEqual(geral.resultados.map((i) => i.titulo), ['Preços dos pratos', 'Horário de funcionamento', 'Regras da casa', 'Cardápio de vinhos']);
+  // validação, permissão e isolamento
+  assert.strictEqual((await f(`${base}/buscar`, { token: k.chave })).status, 400);
+  assert.strictEqual((await f(`${base}/buscar?q=${'x'.repeat(201)}`, { token: k.chave })).status, 400);
+  assert.strictEqual((await f(`${base}/buscar?q=a`)).status, 401);
+  assert.strictEqual((await f('/empresas/empresa_2/conhecimento/buscar?q=a', { token: k.chave })).status, 403);
+  await json('/empresas/empresa_1/modulos', 'PATCH', { conhecimento: false });
+  assert.strictEqual((await f(`${base}/buscar?q=preco`, { token: k.chave })).status, 404);
+  fechar();
+});
+
+test('prompt carrega o conhecimento pequeno inteiro e o grande só por busca', async () => {
+  const { f, fechar } = await subir();
+  const json = (caminho, metodo, corpo, token = T.cliente) => f(caminho, { token, method: metodo, body: corpo });
+  const k = await (await json('/empresas/empresa_1/api/chave', 'POST', {}, T.integracao)).json();
+  const ctx = async () => (await f('/empresas/empresa_1/contexto', { token: k.chave })).json();
+  assert.ok(!(await ctx()).prompt.includes('one_buscar_conhecimento')); // sem itens, sem instrução
+  await json('/empresas/empresa_1/conhecimento', 'POST', { tipo: 'texto', titulo: 'Pequeno', texto: 'Conteúdo curto da casa.' });
+  const p1 = (await ctx()).prompt;
+  assert.ok(p1.includes('Conteúdo curto da casa.') && p1.includes('one_buscar_conhecimento'));
+  await json('/empresas/empresa_1/conhecimento', 'POST', { tipo: 'texto', titulo: 'Manual enorme', texto: 'palavra '.repeat(900) });
+  const p2 = (await ctx()).prompt;
+  assert.ok(!p2.includes('Conteúdo curto da casa.') && !p2.includes('palavra palavra'));
+  assert.ok(p2.includes('Assuntos disponíveis: Pequeno; Manual enorme.'));
+  assert.ok(p2.includes('chame a função one_buscar_conhecimento'));
+  assert.ok(!p2.includes('—'));
+  fechar();
+});
+
+test('reserva guarda nome e contato do cliente vindos do chat', async () => {
+  const { f, fechar } = await subir();
+  const json = (caminho, metodo, corpo, token = T.cliente, h = {}) => f(caminho, { token, method: metodo, body: corpo, headers: h });
+  const k = await (await json('/empresas/empresa_1/api/chave', 'POST', {}, T.integracao)).json();
+  const corpo = { data: '2026-11-20', horario: '20:00', pessoas: 2, ambiente: 'salao', nomeCliente: '  Carlos Lima ', contato: '+55 11 90000-0000' };
+  const r = await (await json('/empresas/empresa_1/reservas', 'POST', corpo, k.chave, { 'Idempotency-Key': 'c1' })).json();
+  assert.strictEqual(r.status, 'confirmada');
+  // equipe vê na lista, no mapa e no histórico
+  const lista = await (await f('/empresas/empresa_1/reservas?data=2026-11-20', { token: T.cliente })).json();
+  assert.deepStrictEqual([lista[0].nomeCliente, lista[0].contato], ['Carlos Lima', '+55 11 90000-0000']);
+  const mapa = await (await f('/empresas/empresa_1/mapa?data=2026-11-20&horario=20:00', { token: T.cliente })).json();
+  assert.strictEqual(mapa[0].mesas[0].reserva.nomeCliente, 'Carlos Lima');
+  const h = await (await f('/empresas/empresa_1/historico?entidade=reserva', { token: T.cliente })).json();
+  assert.strictEqual(h[0].depois.nomeCliente, 'Carlos Lima');
+  assert.strictEqual(h[0].papel, 'chat');
+  // validação
+  const ruim = (extra, chave) => json('/empresas/empresa_1/reservas', 'POST', { ...corpo, horario: '22:00', ...extra }, k.chave, { 'Idempotency-Key': chave });
+  assert.strictEqual((await ruim({ nomeCliente: 'x'.repeat(81) }, 'c2')).status, 400);
+  assert.strictEqual((await ruim({ contato: 'y'.repeat(41) }, 'c3')).status, 400);
+  assert.strictEqual((await ruim({ nomeCliente: 123 }, 'c4')).status, 400);
+  // sem dados do cliente continua valendo
+  const semDados = await ruim({ nomeCliente: undefined, contato: undefined }, 'c5');
+  assert.strictEqual(semDados.status, 201);
+  // equipe edita e limpa
+  const id = r.reservaId;
+  const ed = await (await json(`/empresas/empresa_1/reservas/${id}`, 'PATCH', { nomeCliente: 'Carlos A. Lima', contato: '' })).json();
+  assert.deepStrictEqual([ed.reserva.nomeCliente, ed.reserva.contato], ['Carlos A. Lima', undefined]);
+  const h2 = await (await f(`/empresas/empresa_1/historico?entidade=reserva&id=${id}`, { token: T.cliente })).json();
+  assert.deepStrictEqual(h2[0].antes, { nomeCliente: 'Carlos Lima', contato: '+55 11 90000-0000' });
+  assert.deepStrictEqual(h2[0].depois, { nomeCliente: 'Carlos A. Lima' }); // contato apagado: some do "depois"
+  fechar();
+});

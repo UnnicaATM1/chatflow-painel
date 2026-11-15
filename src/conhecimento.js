@@ -166,4 +166,48 @@ function arquivoDe(store, empresaId, id) {
   return { nome: item.arquivo.nome, mime: item.arquivo.mime, buffer: Buffer.from(item.arquivo.base64, 'base64') };
 }
 
-module.exports = { LIM, TIPOS, criar, editar, excluir, obter, listarPublico, arquivoDe, publica, resumo, achar };
+
+// ---- Busca: o chat pergunta por um assunto e recebe só o que interessa (linhas de tabela, parágrafos) ----
+const norm = (s) => String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const PALAVRAS_VAZIAS = new Set(['de', 'da', 'do', 'das', 'dos', 'no', 'na', 'nos', 'nas', 'um', 'uma', 'o', 'a', 'os', 'as', 'e', 'em', 'para', 'por', 'com', 'que', 'qual', 'quais', 'quanto', 'quanta', 'custa', 'voces', 'tem', 'me', 'se', 'ao', 'aos']);
+
+function termos(q) {
+  return norm(q).split(/[^a-z0-9]+/).filter((t) => t.length >= 2 && !PALAVRAS_VAZIAS.has(t)).map((t) => (t.length > 3 ? t.replace(/s$/, '') : t));
+}
+const acertos = (texto, ts) => { const n = norm(texto); return ts.filter((t) => n.includes(t)).length; };
+
+function buscar(store, empresaId, consulta, limite = 5) {
+  const e = empresa(store, empresaId);
+  const q = typeof consulta === 'string' ? consulta.trim() : '';
+  if (!q) throw erro('informe o assunto da busca em q', 400);
+  if ([...q].length > 200) throw erro('a busca passa do limite de 200 caracteres', 400);
+  const ts = termos(q);
+  // pergunta genérica demais: devolve o catálogo para a IA escolher
+  if (ts.length === 0) {
+    return { consulta: q, catalogo: true, total: e.conhecimento.length, resultados: e.conhecimento.map((i) => ({ id: i.id, titulo: i.titulo, tipo: i.tipo })) };
+  }
+  const out = [];
+  for (const it of e.conhecimento) {
+    const noTitulo = acertos(it.titulo + ' ' + (it.arquivo ? it.arquivo.nome : ''), ts);
+    if (it.tipo === 'tabela') {
+      const linhas = it.tabela.linhas.map((l) => ({ l, s: acertos(l.join(' '), ts) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s);
+      if (linhas.length) out.push({ pontos: linhas[0].s * 2 + noTitulo, r: { id: it.id, titulo: it.titulo, tipo: 'tabela', colunas: it.tabela.colunas, linhas: linhas.slice(0, 20).map((x) => x.l), parcial: linhas.length < it.tabela.linhas.length } });
+      else if (noTitulo) out.push({ pontos: noTitulo, r: { id: it.id, titulo: it.titulo, tipo: 'tabela', colunas: it.tabela.colunas, linhas: it.tabela.linhas.slice(0, 50), parcial: it.tabela.linhas.length > 50 } });
+    } else if (it.texto !== undefined) {
+      const paragrafos = it.texto.split(/\n+/).map((p) => ({ p: p.trim(), s: 0 })).filter((x) => x.p);
+      paragrafos.forEach((x) => { x.s = acertos(x.p, ts); });
+      const bons = paragrafos.filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 5);
+      const base = { id: it.id, titulo: it.titulo, tipo: it.tipo };
+      if (it.arquivo) base.arquivo = { nome: it.arquivo.nome, url: `/empresas/${empresaId}/conhecimento/${it.id}/arquivo` };
+      if (bons.length) out.push({ pontos: bons[0].s * 2 + noTitulo, r: { ...base, trechos: bons.map((x) => x.p) } });
+      else if (noTitulo) out.push({ pontos: noTitulo, r: { ...base, trechos: [it.texto.slice(0, 600)] } });
+    } else if (it.arquivo && noTitulo) {
+      out.push({ pontos: noTitulo, r: { id: it.id, titulo: it.titulo, tipo: 'documento', arquivo: { nome: it.arquivo.nome, url: `/empresas/${empresaId}/conhecimento/${it.id}/arquivo` } } });
+    }
+  }
+  out.sort((a, b) => b.pontos - a.pontos);
+  const resultados = out.slice(0, Math.min(Math.max(Number(limite) || 5, 1), 10)).map((x) => x.r);
+  return { consulta: q, total: out.length, resultados };
+}
+
+module.exports = { buscar, LIM, TIPOS, criar, editar, excluir, obter, listarPublico, arquivoDe, publica, resumo, achar };

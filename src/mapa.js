@@ -16,7 +16,7 @@ function mapa(store, empresaId, data, horario) {
         id: m.id,
         capacidade: m.capacidade,
         situacao: r ? 'reservada' : 'livre',
-        reserva: r ? { horario: r.horario, pessoas: r.pessoas, status: r.status } : null,
+        reserva: r ? { horario: r.horario, pessoas: r.pessoas, status: r.status, ...(r.nomeCliente ? { nomeCliente: r.nomeCliente } : {}), ...(r.contato ? { contato: r.contato } : {}) } : null,
       };
     }),
   }));

@@ -1,6 +1,6 @@
 {
   "name": "one_reservar",
-  "description": "Registra a reserva de mesa no ONE, depois que o cliente escolheu data, horário, pessoas e (opcionalmente) a mesa ou o ambiente. Só confirme a reserva ao cliente se a resposta tiver status 'confirmada'. Se vier 'indisponivel', ofereça as alternativas devolvidas em `disponibilidade`.",
+  "description": "Registra a reserva de mesa no ONE, depois que o cliente escolheu data, horário, pessoas e (opcionalmente) a mesa ou o ambiente. Envie também o nome e o contato do cliente (o NicoChat já tem esses dados do contato). Só confirme a reserva ao cliente se a resposta tiver status 'confirmada'. Se vier 'indisponivel', ofereça as alternativas devolvidas em `disponibilidade`.",
   "method": "POST",
   "url": "{{URL_ONE}}/empresas/{{EMPRESA_ID}}/reservas",
   "headers": {
@@ -16,11 +16,21 @@
       "horario": { "type": "string", "description": "HH:MM" },
       "pessoas": { "type": "integer", "minimum": 1 },
       "mesaId": { "type": "string", "description": "Código da mesa escolhida entre as livres (opcional)" },
-      "ambiente": { "type": "string", "description": "Ambiente preferido (opcional)" }
+      "ambiente": { "type": "string", "description": "Ambiente preferido (opcional)" },
+      "nomeCliente": { "type": "string", "description": "Nome do cliente, até 80 caracteres (opcional, mas envie sempre que tiver)" },
+      "contato": { "type": "string", "description": "Telefone ou e-mail do cliente, até 40 caracteres (opcional, mas envie sempre que tiver)" }
     },
     "required": ["data", "horario", "pessoas"]
   },
-  "body": { "data": "{{data}}", "horario": "{{horario}}", "pessoas": "{{pessoas}}", "mesaId": "{{mesaId}}", "ambiente": "{{ambiente}}" },
+  "body": {
+    "data": "{{data}}",
+    "horario": "{{horario}}",
+    "pessoas": "{{pessoas}}",
+    "mesaId": "{{mesaId}}",
+    "ambiente": "{{ambiente}}",
+    "nomeCliente": "{{contato.nome}}",
+    "contato": "{{contato.telefone}}"
+  },
   "response": {
     "status": "'confirmada' (HTTP 201) ou 'indisponivel' (HTTP 200)",
     "mesa": "código da mesa reservada",

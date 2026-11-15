@@ -1,35 +1,37 @@
 {
   "nome": "ONE",
-  "descricao": "Atendimento por IA com o contexto do agente vindo do ONE. A conversa é iniciada pela mensagem #one. Cada empresa do ONE tem a sua cópia deste fluxo, com a sua própria chave de API.",
+  "descricao": "Atendimento por IA com tudo vindo do ONE. TODA conversa nova começa buscando o contexto do agente no ONE; durante a conversa, a IA chama funções do ONE para buscar conhecimento (tabela de preços, horários, regras) e para consultar e registrar reservas. Cada empresa do ONE tem a sua cópia deste fluxo, com a sua própria chave de API.",
   "workspace": "Unnicaflow",
   "canal": "Chatflow",
   "pasta": "ONE",
-  "observacao_formato": "Este arquivo descreve o fluxo em formato neutro. Adapte os nomes dos blocos ao formato de importação do NicoChat.",
+  "observacao_formato": "Formato neutro. Adapte os nomes dos blocos ao formato de importação do NicoChat.",
   "variaveis": {
     "URL_ONE": "endereço PÚBLICO do ONE (não funciona com 127.0.0.1: o NicoChat roda na nuvem)",
-    "EMPRESA_ID": "ex.: empresa_1 (aba API do ONE mostra o id de cada empresa)",
-    "CHAVE_API": "chave k1_... gerada na aba API da empresa (guarde como segredo, nunca no texto do fluxo)"
+    "EMPRESA_ID": "ex.: empresa_1 (a aba API do ONE mostra o id de cada empresa)",
+    "CHAVE_API": "chave k1_... gerada na aba API da empresa (guarde como segredo do NicoChat, nunca no texto do fluxo)"
   },
   "gatilho": {
-    "tipo": "mensagem_recebida",
-    "condicao": "a mensagem, sem espaços nas pontas e sem diferenciar maiúsculas, começa com #one",
-    "texto_do_cliente": "tudo que vem depois de #one; se vazio, use a saudação padrão do agente"
+    "tipo": "conversa_iniciada",
+    "condicao": "primeira mensagem de uma conversa nova com o cliente, seja qual for o texto",
+    "modo_teste_opcional": "uma mensagem que comece com #one pode ser usada só para disparar um teste manual; não faz parte do funcionamento normal"
   },
   "passos": [
     {
       "id": "contexto",
       "tipo": "funcao",
       "funcao": "one_contexto",
+      "quando": "uma vez no início de cada conversa nova",
       "salvar_em": "contexto",
       "se_falhar": "responder 'Não consegui acessar as informações agora. Já avisei a equipe.' e encerrar; não inventar respostas"
     },
     {
-      "id": "responder",
+      "id": "conversar",
       "tipo": "ia",
       "instrucao_de_sistema": "{{contexto.prompt}}",
-      "mensagem_do_usuario": "{{texto_do_cliente}}",
-      "funcoes_disponiveis": ["one_disponibilidade", "one_reservar"],
-      "observacao": "Se contexto.recursos.reservas for falso, não ofereça as funções de reserva. Mantenha o histórico da conversa nas mensagens seguintes e NÃO chame one_contexto de novo, a menos que a conversa recomece com #one."
+      "mensagem_do_usuario": "{{mensagem_do_cliente}}",
+      "funcoes_disponiveis": ["one_buscar_conhecimento", "one_disponibilidade", "one_reservar"],
+      "repetir_a_cada_mensagem": true,
+      "observacao": "A IA decide quando chamar cada função, seguindo o prompt vindo do ONE. Se contexto.recursos.reservas for falso, não ofereça one_disponibilidade nem one_reservar. Se contexto.recursos.conhecimento for falso, não ofereça one_buscar_conhecimento. Não chame one_contexto de novo dentro da mesma conversa."
     },
     {
       "id": "enviar",
@@ -37,9 +39,15 @@
       "texto": "{{resposta_da_ia}}"
     }
   ],
+  "quando_chamar_cada_funcao": {
+    "one_buscar_conhecimento": "o cliente pergunta sobre preço, produto, serviço, horário, forma de pagamento, regra ou qualquer informação da empresa",
+    "one_disponibilidade": "o cliente quer reservar mesa: depois de saber data, horário e número de pessoas, ANTES de oferecer qualquer opção",
+    "one_reservar": "o cliente escolheu a mesa e confirmou; enviar também nomeCliente e contato do contato do NicoChat"
+  },
   "regras": [
     "Só confirmar reserva ao cliente depois que one_reservar devolver status 'confirmada'.",
     "Sempre chamar one_disponibilidade antes de oferecer horário ou mesa.",
+    "Responder sobre preços e regras apenas com o que one_buscar_conhecimento devolver; se não vier nada, dizer que vai confirmar com a equipe.",
     "Reenviar a mesma Idempotency-Key se one_reservar precisar ser repetido.",
     "Uma chave de API por empresa: a chave de uma empresa não funciona nas outras (o ONE devolve 403)."
   ]

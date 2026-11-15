@@ -274,7 +274,7 @@ function criarServidor(store, tokens, opcoes = {}) {
         const b = await lerCorpo(req);
         const r = mudarReserva(store, lid, rid, () => (b.status === 'cancelada' ? cancelarReserva(store, lid, rid)
           : b.status === 'confirmada' ? reativarReserva(store, lid, rid)
-            : editarReserva(store, lid, rid, { pessoas: b.pessoas, data: b.data, horario: b.horario, mesaId: b.mesaId })), ator);
+            : editarReserva(store, lid, rid, { pessoas: b.pessoas, data: b.data, horario: b.horario, mesaId: b.mesaId, nomeCliente: b.nomeCliente, contato: b.contato })), ator);
         return responder(res, r.status === 'indisponivel' ? 409 : 200, r);
       }
       // POST /empresas/:id/historico/:seq/desfazer
@@ -298,6 +298,9 @@ function criarServidor(store, tokens, opcoes = {}) {
           const item = conhecimento.criar(store, eid, await lerCorpo(req, LIMITE_CORPO_ARQUIVO));
           registrar(store, { empresaId: eid, entidade: 'conhecimento', entidadeId: item.id, acao: 'criada', ...ator, depois: conhecimento.resumo(item) });
           return responder(res, 201, conhecimento.publica(eid, item));
+        }
+        if (partes.length === 4 && partes[3] === 'buscar' && req.method === 'GET') {
+          return responder(res, 200, conhecimento.buscar(store, eid, url.searchParams.get('q'), url.searchParams.get('limite')));
         }
         const itemId = Number(partes[3]);
         if (!Number.isInteger(itemId)) return responder(res, 404, { erro: 'item de conhecimento inexistente' });
@@ -384,7 +387,7 @@ function criarServidor(store, tokens, opcoes = {}) {
           return responder(res, 400, { erro: 'data (AAAA-MM-DD) e horario (HH:MM) obrigatórios' });
         }
         const antesN = store.reservas.length;
-        const r = reservar(store, { empresaId, data: b.data, horario: b.horario, pessoas: b.pessoas, ambiente: b.ambiente, mesaId: b.mesaId, chave: String(chave) });
+        const r = reservar(store, { empresaId, data: b.data, horario: b.horario, pessoas: b.pessoas, ambiente: b.ambiente, mesaId: b.mesaId, chave: String(chave), nomeCliente: b.nomeCliente, contato: b.contato });
         if (r.status === 'confirmada' && store.reservas.length > antesN) {
           registrar(store, { empresaId, entidade: 'reserva', entidadeId: r.reservaId, acao: 'criada', ...quem(req, papel), depois: publica(store.reservas[store.reservas.length - 1]) });
         }

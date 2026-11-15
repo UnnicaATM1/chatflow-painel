@@ -5,10 +5,10 @@
 <!-- STATUS_START -->
 design-system: 60%
 telas-referencia: 100%
-frontend: 72%
-backend: 82%
+frontend: 75%
+backend: 86%
 planejamento-tela-01: 100%
-geral: 67%
+geral: 71%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -48,10 +48,12 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 
 - [ ] Exclusão de empresa: trocar a senha do administrador por algo forte (a atual tem 6 caracteres; o bloqueio de 5 erros / 15 min mitiga, mas é fraca) e, quando houver contas, trocar a senha única por login real de administrador; avaliar "restaurar empresa excluída" a partir do instantâneo gravado no histórico
 
+- [ ] LGPD: a reserva agora guarda nome e contato do cliente (e o histórico copia esses dados): definir prazo de retenção, base legal e como apagar a pedido do titular antes de usar com clientes reais
+- [ ] Busca no conhecimento é por palavras (sem IA): se o catálogo crescer ou as perguntas fugirem das palavras cadastradas, avaliar busca semântica
 - [ ] Base de conhecimento: documentos e itens ficam em memória (arquivos em base64, até 4 MB cada, 200 itens por empresa); levar para banco/armazenamento de arquivos e extrair o texto de PDF, Word e Excel (hoje só .txt, .md e .csv têm texto lido pela API; os demais só baixam)
 - [ ] Trocar os `window.confirm` da aba API (gerar nova chave, revogar) por confirmação na própria tela, como já é feito ao excluir item e empresa
 
-- [ ] NicoChat: conectar o MCP do NicoChat à sessão e criar o fluxo ONE na pasta de fluxos do workspace Unnicaflow, canal Chatflow (hoje só existem os arquivos em `nicochat/fluxos/ONE/`, nada foi criado lá)
+- [ ] NicoChat (feito pelo navegador, via Claude in Chrome, porque o MCP só carrega em sessão nova): em `app.nicochat.com`, workspace **Unnica Flow** (conta 119255), canal **ChatFlow** (bot f124625), área Sub Fluxos, pasta **ONE**. JÁ CRIADOS, todos como Fluxo de Função em RASCUNHO (não publicados), cada um com um bloco Ação > Solicitação Externa - API: `one_contexto` (GET `/empresas/empresa_1/contexto`), `one_buscar_conhecimento` (GET `/empresas/empresa_1/conhecimento/buscar?q=ASSUNTO_DA_PERGUNTA`), `one_disponibilidade` (GET `/empresas/empresa_1/disponibilidade?data=AAAA-MM-DD&horario=HH:MM&pessoas=N`), `one_reservar` (POST `/empresas/empresa_1/reservas`, corpo raw JSON com `data`, `horario`, `pessoas`, `mesaId`, `nomeCliente`, `contato`, cabeçalhos Authorization, Content-Type e Idempotency-Key). Todos com marcadores a trocar: host `https://ENDERECO-PUBLICO-DO-ONE`, `Bearer COLE_AQUI_A_CHAVE_DA_EMPRESA`, `ASSUNTO_DA_PERGUNTA`, `AAAA-MM-DD`, `HH:MM`, `N`, `ID_UNICO_DA_RESERVA`, `NOME_DO_CLIENTE`, `TELEFONE_DO_CLIENTE`. FALTA: trocar os marcadores por variáveis do NicoChat (não usar `{{ }}` digitado: vira chip de variável e quebra o campo; escolher a variável pelo botão `</>` do campo), mapear a resposta de cada função (aba Resposta: Caminho JSON para Campo Personalizado, que precisa ser criado no workspace), criar o Sub Fluxo Web principal com **Ações de IA > Agente de IA** usando as 4 functions, publicar e testar. Truques da interface: Duplicar é PRO (não usar); o menu Ações Avançadas > Solicitação Externa só aceita o clique se for feito à esquerda do avatar (x~1360), senão abre o menu do perfil (tem Sair); o dropdown de método HTTP precisa de 1 s de espera antes de escolher GET; o menu Novo Bot só cria bots por canal. O ChatFlow já tem fluxos do João (16 pastas): não alterar os existentes
 - [ ] Publicar o ONE em endereço público (servidor ou túnel): o NicoChat roda na nuvem e não alcança `127.0.0.1`. Depois, testar de verdade o gatilho `#one` ponta a ponta
 
 ## 🧠 Aprendizados importantes
@@ -87,7 +89,8 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - Base de conhecimento (`src/conhecimento.js`): itens `texto` (até 50.000 caracteres), `tabela` (até 20 colunas, 1.000 linhas, 500 caracteres por célula) e `documento` (.txt, .md, .csv, .pdf, .docx, .xlsx até 4 MB; o conteúdo é checado pelos primeiros bytes, nada de HTML/SVG). `GET /empresas/:id/conhecimento` devolve tudo de uma vez (a chave da empresa só lê); `.../conhecimento/:itemId` e `.../:itemId/arquivo` (anexo, `nosniff`, `CSP sandbox`). POST/PATCH/DELETE só para a equipe; tipo do item não muda. Tudo vai para o histórico (sem os bytes do arquivo). Na tela: aba Conhecimento com editor de tabela, colar de planilha (TAB, `;` ou `,`) e upload.
 - Terminal do Windows (Git Bash) não envia UTF-8 em `curl -d` com acentos: o texto chega corrompido. Para semear dados de demonstração use um script Node, não `curl`.
 
-- Integração NicoChat (fluxo ONE): gatilho `#one`; `GET /empresas/:id/contexto` (aceita a chave da empresa) devolve numa chamada o agente, os recursos, a base de conhecimento e um `prompt` de sistema montado em `src/contexto.js` (sem travessões, regra do design system para prompts de agente). Pasta `nicochat/fluxos/ONE/` com fluxo, 3 functions e `simular-nicochat.js` (simula o fluxo contra a API; com `--reservar` grava uma reserva de teste; usa `process.exitCode`, nunca `process.exit`, porque o Node no Windows aborta com erro do libuv). A aba API gera as functions por empresa e mostra o prompt. Formato de importação do NicoChat ainda não conhecido: os JSON são neutros.
+- Desenho final da integração NicoChat (decisão do João): `#one` NÃO é gatilho de produção, só serve para disparar teste manual. TODA conversa nova do cliente começa chamando `GET /empresas/:id/contexto`; depois a IA do NicoChat aciona funções: `one_buscar_conhecimento` (`GET /empresas/:id/conhecimento/buscar?q=`) quando o cliente pergunta preço, horário, pagamento ou regra; `one_disponibilidade` e `one_reservar` quando quer mesa. A reserva guarda `nomeCliente` (até 80) e `contato` (até 40) vindos do contato do NicoChat; aparecem no Workspace, no mapa e no histórico (dado pessoal: ver LGPD nas pendências). A busca (`conhecimento.buscar`) ignora acento, maiúsculas e plural, devolve só as linhas de tabela e os parágrafos que casam, e responde catálogo quando a pergunta é genérica. O prompt só embute o conhecimento se ele couber em 6.000 caracteres; acima disso instrui a IA a usar a busca. `simular-conversa.js` roda uma conversa inteira contra o ONE (`--reservar` grava de verdade).
+- Integração NicoChat (fluxo ONE, versão anterior com #one): `GET /empresas/:id/contexto` (aceita a chave da empresa) devolve numa chamada o agente, os recursos, a base de conhecimento e um `prompt` de sistema montado em `src/contexto.js` (sem travessões, regra do design system para prompts de agente). Pasta `nicochat/fluxos/ONE/` com fluxo, 3 functions e `simular-nicochat.js` (simula o fluxo contra a API; com `--reservar` grava uma reserva de teste; usa `process.exitCode`, nunca `process.exit`, porque o Node no Windows aborta com erro do libuv). A aba API gera as functions por empresa e mostra o prompt. Formato de importação do NicoChat ainda não conhecido: os JSON são neutros.
 
 ## 🚫 Armadilhas conhecidas
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.

@@ -1,0 +1,21 @@
+{
+  "name": "one_buscar_conhecimento",
+  "description": "Busca no ONE a informação que o cliente pediu na base de conhecimento da empresa: tabela de preços, horários, formas de pagamento, regras da casa, documentos. Devolve só o que interessa (linhas da tabela ou parágrafos). Chame sempre que o cliente perguntar sobre preços, produtos, serviços, horários ou regras. Responda apenas com o que vier aqui; se não vier nada, diga que vai confirmar com a equipe.",
+  "method": "GET",
+  "url": "{{URL_ONE}}/empresas/{{EMPRESA_ID}}/conhecimento/buscar?q={{consulta}}",
+  "headers": {
+    "Authorization": "Bearer {{CHAVE_API}}"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "consulta": { "type": "string", "description": "O assunto da pergunta do cliente, com as palavras dele (ex.: 'lasanha', 'aceita cheque', 'horário de domingo'). Codifique para URL." }
+    },
+    "required": ["consulta"]
+  },
+  "response": {
+    "resultados": "lista; cada item tem titulo e tipo. tipo 'tabela': colunas e linhas (só as que casam, parcial=true quando há mais). tipo 'texto' ou 'documento': trechos (parágrafos que casam) e, se houver arquivo, arquivo.url. 'documento' sem texto: só o arquivo.",
+    "total": "quantos itens casaram (0 = nada encontrado)",
+    "catalogo": "true quando a pergunta foi genérica: resultados traz só a lista de assuntos disponíveis"
+  }
+}

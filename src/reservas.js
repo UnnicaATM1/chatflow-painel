@@ -38,9 +38,25 @@ function disponibilidade(store, empresaId, data, horario, pessoas, ignorarId) {
   };
 }
 
-function reservar(store, { empresaId, data, horario, pessoas, ambiente, mesaId, chave }) {
+function erro(msg, codigo) { return Object.assign(new Error(msg), { codigo }); }
+
+// Dados do cliente que o chat conhece (opcionais): nome até 80 e contato (telefone ou e-mail) até 40 caracteres.
+function validarCliente(d) {
+  const out = {};
+  for (const [campo, max] of [['nomeCliente', 80], ['contato', 40]]) {
+    if (d[campo] === undefined || d[campo] === null) continue;
+    if (typeof d[campo] !== 'string') throw erro(`${campo} deve ser texto`, 400);
+    const v = d[campo].trim();
+    if ([...v].length > max) throw erro(`${campo} passa do limite de ${max} caracteres`, 400);
+    out[campo] = v;
+  }
+  return out;
+}
+
+function reservar(store, { empresaId, data, horario, pessoas, ambiente, mesaId, chave, nomeCliente, contato }) {
   const l = empresa(store, empresaId);
   if (!Number.isInteger(pessoas) || pessoas < 1) throw new Error('pessoas inválido');
+  const cliente = validarCliente({ nomeCliente, contato });
 
   const k = `${empresaId}:${chave}`;
   if (chave && store.chaves.has(k)) return store.chaves.get(k);
@@ -54,7 +70,7 @@ function reservar(store, { empresaId, data, horario, pessoas, ambiente, mesaId, 
     const ini = inicio(data, horario);
     const r = {
       id: (store.seqReserva = (store.seqReserva || 0) + 1), empresaId, mesaId: mesa.id, ambiente: amb,
-      data, horario, pessoas, inicio: ini, fim: ini + DURACAO_MS, status: 'confirmada',
+      data, horario, pessoas, inicio: ini, fim: ini + DURACAO_MS, status: 'confirmada', ...cliente,
     };
     store.reservas.push(r);
     res = { status: 'confirmada', reservaId: r.id, mesa: mesa.id, ambiente: amb };
@@ -70,8 +86,6 @@ function reservar(store, { empresaId, data, horario, pessoas, ambiente, mesaId, 
   if (chave) store.chaves.set(k, res);
   return res;
 }
-
-function erro(msg, codigo) { return Object.assign(new Error(msg), { codigo }); }
 
 function achar(store, empresaId, id) {
   empresa(store, empresaId);
@@ -96,7 +110,9 @@ function editarReserva(store, empresaId, id, mudancas) {
     return { status: 'indisponivel', disponibilidade: disponibilidade(store, empresaId, data, horario, pessoas, r.id).ambientes };
   }
   const ini = inicio(data, horario);
-  Object.assign(r, { pessoas, data, horario, mesaId, ambiente: alvo.ambiente, inicio: ini, fim: ini + DURACAO_MS });
+  const cliente = validarCliente(mudancas);
+  Object.assign(r, { pessoas, data, horario, mesaId, ambiente: alvo.ambiente, inicio: ini, fim: ini + DURACAO_MS }, cliente);
+  for (const k of Object.keys(cliente)) if (cliente[k] === '') delete r[k];
   return { status: 'atualizada', reserva: publica(r) };
 }
 
@@ -116,8 +132,11 @@ function reativarReserva(store, empresaId, id) {
   return { status: 'confirmada', reserva: publica(r) };
 }
 
-function publica({ id, mesaId, ambiente, data, horario, pessoas, status }) {
-  return { id, mesaId, ambiente, data, horario, pessoas, status };
+function publica({ id, mesaId, ambiente, data, horario, pessoas, status, nomeCliente, contato }) {
+  const o = { id, mesaId, ambiente, data, horario, pessoas, status };
+  if (nomeCliente) o.nomeCliente = nomeCliente;
+  if (contato) o.contato = contato;
+  return o;
 }
 
-module.exports = { reservar, livres, disponibilidade, editarReserva, cancelarReserva, reativarReserva, publica, DURACAO_MIN };
+module.exports = { validarCliente, reservar, livres, disponibilidade, editarReserva, cancelarReserva, reativarReserva, publica, DURACAO_MIN };
