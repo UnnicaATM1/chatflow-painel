@@ -21,7 +21,9 @@ const CONEX = Number(process.env.CARGA_CONEX) || 64;
 const PARADAS = Number(process.env.CARGA_PARADAS) || 2000; // conexões abertas ao mesmo tempo na fase B
 const TOKEN = 'ti-carga';
 
-const livre = () => new Promise((r) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => r(p)); }); });
+// Porta livre entre 3900 e 3999 (faixa reservada a servidores de teste; 3456 e 3480 são de outras sessões e nunca entram)
+const tentar = (porta) => new Promise((r) => { const s = net.createServer(); s.once('error', () => r(false)); s.listen(porta, '127.0.0.1', () => s.close(() => r(true))); });
+const livre = async () => { for (let p = 3900; p < 4000; p++) if (await tentar(p)) return p; throw new Error('nenhuma porta livre de 3900 a 3999'); };
 
 function memoriaMB(pid) {
   try {
@@ -42,6 +44,7 @@ const pct = (v, p) => v.length ? v[Math.min(v.length - 1, Math.floor(v.length * 
   const env = {
     PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, PORT: String(porta), KENDJI_DEMO: '1',
     KENDJI_TOKEN_INTEGRACAO: TOKEN, KENDJI_LIMITE_CHAVE: '100000000', KENDJI_LIMITE_INVALIDAS: '100000000', KENDJI_SEMENTE_ARQUIVO: semente,
+    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('KENDJI_IDEMPOTENCIA_'))),
   };
   const filho = spawn(COMANDO[0], COMANDO.slice(1), { env, cwd: RAIZ, stdio: ['ignore', 'ignore', 'inherit'], shell: false });
   const parar = () => { try { filho.kill(); } catch { /* já saiu */ } try { fs.unlinkSync(semente); } catch { /* já apagado */ } };
@@ -110,6 +113,7 @@ const pct = (v, p) => v.length ? v[Math.min(v.length - 1, Math.floor(v.length * 
   // Fase B: muitas conexões abertas ao mesmo tempo, todas pedindo /saude
   const abertas = [];
   let respondidas = 0, falhas = 0;
+  const codigos = {}; // motivo de cada conexão que falhou (erro do lado do cliente, como EADDRNOTAVAIL, ou do servidor)
   const t0 = Date.now();
   await new Promise((resolve) => {
     let feitas = 0;
@@ -120,13 +124,13 @@ const pct = (v, p) => v.length ? v[Math.min(v.length - 1, Math.floor(v.length * 
       let buf = '';
       s.on('connect', () => s.write('GET /saude HTTP/1.1\r\nHost: x\r\n\r\n'));
       s.on('data', (d) => { buf += d; if (buf.includes('{"ok":true}')) { respondidas++; s.removeAllListeners('data'); fim1(); } });
-      s.on('error', () => { falhas++; fim1(); });
+      s.on('error', (e) => { falhas++; codigos[e.code || e.message] = (codigos[e.code || e.message] || 0) + 1; fim1(); });
     }
   });
   const memB = memoriaMB(filho.pid);
   const vivo = (await chamar('GET', '/saude')).s;
   abertas.forEach((s) => s.destroy());
-  console.log(JSON.stringify({ rotulo: `B) ${PARADAS} conexões abertas ao mesmo tempo`, respondidas, falhas, segundos: ((Date.now() - t0) / 1000).toFixed(2), memoriaMB: memB, saudeDepois: vivo }));
+  console.log(JSON.stringify({ rotulo: `B) ${PARADAS} conexões abertas ao mesmo tempo`, respondidas, falhas, motivosDasFalhas: codigos, segundos: ((Date.now() - t0) / 1000).toFixed(2), memoriaMB: memB, saudeDepois: vivo }));
 
   await new Promise((r) => setTimeout(r, 1500));
   const c = await fase('C) mesma carga mista depois das conexões abertas (confere recuperação)', Math.max(5, Math.round(SEGUNDOS / 2)));
