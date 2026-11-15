@@ -10,9 +10,18 @@ use std::sync::{Arc, Mutex, MutexGuard};
 /// Sumidouro de auditoria: chamado com cada evento de histórico gravado (o adaptador grava em arquivo).
 pub type Sink = Arc<dyn Fn(&Json) + Send + Sync>;
 
+/// Base de conhecimento de uma empresa. Fica fora de `Empresa` para que ler a empresa (toda requisição) não copie
+/// os itens, que podem ter documentos de vários MB.
+#[derive(Default)]
+struct Conh {
+    itens: Vec<Json>,
+    prox: i64,
+}
+
 #[derive(Default)]
 struct Estado {
     empresas: Vec<Empresa>,
+    conhecimento: HashMap<String, Conh>,
     reservas: Vec<Reserva>,
     idempotencia: HashMap<String, Json>,
     historico: Vec<Json>,
@@ -116,6 +125,13 @@ impl Repositorio for Memoria {
     async fn empresa_criar(&self, e: Empresa) -> Empresa {
         let mut est = self.est();
         est.empresas.retain(|x| x.id != e.id);
+        est.conhecimento.insert(
+            e.id.clone(),
+            Conh {
+                itens: Vec::new(),
+                prox: 1,
+            },
+        );
         est.empresas.push(e.clone());
         e
     }
@@ -453,19 +469,17 @@ impl Repositorio for Memoria {
 
     async fn conhecimento_listar(&self, empresa_id: &str) -> Vec<Json> {
         self.est()
-            .empresas
-            .iter()
-            .find(|e| e.id == empresa_id)
-            .map(|e| e.conhecimento.clone())
+            .conhecimento
+            .get(empresa_id)
+            .map(|c| c.itens.clone())
             .unwrap_or_default()
     }
 
     async fn conhecimento_obter(&self, empresa_id: &str, id: i64) -> Option<Json> {
         let est = self.est();
-        est.empresas
-            .iter()
-            .find(|e| e.id == empresa_id)?
-            .conhecimento
+        est.conhecimento
+            .get(empresa_id)?
+            .itens
             .iter()
             .find(|i| i.get("id").and_then(Json::as_i64) == Some(id))
             .cloned()
@@ -478,22 +492,22 @@ impl Repositorio for Memoria {
         max_itens: usize,
     ) -> CriarItem {
         let mut est = self.est();
-        let Some(e) = est.empresa_mut(empresa_id) else {
+        let Some(c) = est.conhecimento.get_mut(empresa_id) else {
             return CriarItem::Limite;
         };
-        if e.conhecimento.len() >= max_itens {
+        if c.itens.len() >= max_itens {
             return CriarItem::Limite;
         }
         let mut m = Map::new();
-        m.insert("id".into(), e.prox_conhecimento.into());
+        m.insert("id".into(), c.prox.into());
         if let Json::Object(o) = item {
             for (k, v) in o {
                 m.insert(k, v);
             }
         }
-        e.prox_conhecimento += 1;
+        c.prox += 1;
         let novo = Json::Object(m);
-        e.conhecimento.push(novo.clone());
+        c.itens.push(novo.clone());
         CriarItem::Ok(novo)
     }
 
@@ -504,9 +518,10 @@ impl Repositorio for Memoria {
         mudancas: Vec<(String, Json)>,
     ) -> Option<Json> {
         let mut est = self.est();
-        let e = est.empresa_mut(empresa_id)?;
-        let item = e
+        let item = est
             .conhecimento
+            .get_mut(empresa_id)?
+            .itens
             .iter_mut()
             .find(|i| i.get("id").and_then(Json::as_i64) == Some(id))?;
         if let Json::Object(o) = item {
@@ -523,12 +538,12 @@ impl Repositorio for Memoria {
 
     async fn conhecimento_excluir(&self, empresa_id: &str, id: i64) -> Option<Json> {
         let mut est = self.est();
-        let e = est.empresa_mut(empresa_id)?;
-        let pos = e
-            .conhecimento
+        let c = est.conhecimento.get_mut(empresa_id)?;
+        let pos = c
+            .itens
             .iter()
             .position(|i| i.get("id").and_then(Json::as_i64) == Some(id))?;
-        Some(e.conhecimento.remove(pos))
+        Some(c.itens.remove(pos))
     }
 
     async fn historico_acrescentar(&self, ev: Json) -> Json {
@@ -600,6 +615,7 @@ impl Repositorio for Memoria {
     async fn empresa_excluir(&self, id: &str, evento: Json) -> Json {
         let mut est = self.est();
         est.empresas.retain(|e| e.id != id);
+        est.conhecimento.remove(id);
         est.reservas.retain(|r| r.empresa_id != id);
         let prefixo = format!("{id}:");
         est.idempotencia.retain(|k, _| !k.starts_with(&prefixo));

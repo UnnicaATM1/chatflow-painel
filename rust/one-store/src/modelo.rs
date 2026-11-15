@@ -48,8 +48,6 @@ pub struct Empresa {
     pub ambientes: Vec<Ambiente>,
     pub modulos: Modulos,
     pub chave: Option<Chave>,
-    pub conhecimento: Vec<Json>,
-    pub prox_conhecimento: i64,
 }
 
 impl Empresa {
@@ -67,8 +65,6 @@ impl Empresa {
             ambientes,
             modulos,
             chave: None,
-            conhecimento: Vec::new(),
-            prox_conhecimento: 1,
         }
     }
 

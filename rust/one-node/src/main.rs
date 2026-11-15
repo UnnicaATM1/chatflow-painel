@@ -340,6 +340,15 @@ async fn main() {
         .map(str::to_string)
         .collect();
     cfg.confiar_proxy = variavel("KENDJI_CONFIAR_PROXY").as_deref() == Some("1");
+    // KENDJI_LIMITE_CHAVE / KENDJI_LIMITE_INVALIDAS: requisições por minuto por chave válida (padrão 300) e por IP com chave inválida (padrão 20).
+    cfg.limite_validas = variavel("KENDJI_LIMITE_CHAVE")
+        .and_then(|v| v.parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(cfg.limite_validas);
+    cfg.limite_invalidas = variavel("KENDJI_LIMITE_INVALIDAS")
+        .and_then(|v| v.parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(cfg.limite_invalidas);
     cfg.fuso = one_core::tempo::fuso_de(std::env::var("KENDJI_FUSO").ok().as_deref());
     let ctx = match Contexto::novo(repo, plat, cfg) {
         Ok(c) => c,

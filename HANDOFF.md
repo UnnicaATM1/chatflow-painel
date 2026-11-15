@@ -8,7 +8,7 @@ telas-referencia: 100%
 frontend: 75%
 backend: 86%
 planejamento-tela-01: 100%
-api-rust: 90%
+api-rust: 95%
 geral: 71%
 <!-- STATUS_END -->
 
@@ -23,6 +23,7 @@ Regras deste bloco, sempre seguir:
   ou criada — nunca deixe desatualizado por mais de uma sessão de trabalho.
 
 ## 📍 Onde paramos
+TASK-008 feita: o `one-core` roda em WebAssembly (`rust/one-wasm-prova`, `node tests/wasm-prova.js` dá `prova() = 0`, módulo sem importações), `KENDJI_FUSO` é lida no Rust, e há teste de carga (`node tests/carga.js`). Resultado e achado de memória em `rust/README.md`.
 TASK-007 (fase 1) feita: a API do ONE existe em Rust em `rust/` (workspace `one-store`, `one-core`, `one-node`), com o mesmo contrato HTTP do JavaScript. Régua de contrato (`ONE_SERVIDOR`): 34 de 34 contra o JavaScript e 34 de 34 contra o binário Rust (9 testes internos do JS pulados); teste diferencial `tests/diferencial-rust.js`: 109 requisições, 0 diferenças; `cargo fmt`, `clippy -D warnings` e `cargo test` limpos; `npm test` segue 51 de 51. O JavaScript continua sendo o que roda; trocar para o Rust é decisão do João. Como rodar e verificar: `rust/README.md`.
 TASK-005 concluída (commits 2141764 a d1f4e7c): `src/` ficou independente do Node e segue rodando em Node (48 testes verdes). Núcleo `tratar(req, ctx)` em `src/nucleo.js`, adaptador Node em `src/node/`, plataforma injetável (`src/plataforma.js`), repositório assíncrono com operações atômicas nomeadas (`src/repositorio.js`, ver `docs/atomicidade.md`), datas em minutos absolutos sem fuso (`src/tempo.js`) e `src/package.json` com `type: module`. Falta só a camada Cloudflare (D1, R2, adaptador `fetch`): seção "Estado depois da TASK-005" em `docs/portabilidade-worker.md`.
 TASK-001 parte 2 concluída: `docs/plano-tela-01.md` documenta layout desktop/celular, componentes existentes, estados, responsividade, passos de implementação e lacunas da tela Atendimento · Conversas.
@@ -66,6 +67,8 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - [ ] Rust (decisão do João: o ONE deve ser todo em Rust; a stack em Node foi escolha minha sem confirmar, o projeto não tinha stack definida): TASK-007 com o T01, fase 1 = só a API em `rust/` (crates one-core, one-store, one-node), guiada por `docs/migracao-rust.md`. Premissas assumidas porque o João não respondeu ao escopo: painel em Rust (Leptos/Dioxus) só na fase 2 com OK dele; o JavaScript atual segue intocado e rodando o teste do NicoChat; a versão Rust só substitui quando passar nos testes de contrato HTTP (os 51 testes de `tests/` viram independentes da implementação). Confirmar com o João: alcance (API só ou API e painel), e se o destino final é o Worker do Sites (workers-rs)
 
 - [ ] Rust: decidir com o João se o binário Rust passa a ser a API do teste com o NicoChat (hoje só o JavaScript roda). Fase 2 (painel em Rust, WebAssembly com Leptos ou Dioxus) muda o design system e só começa com o OK do João. Depois: adaptador Worker (`workers-rs`), D1/R2 no `one-store`, e desligar o JavaScript. Falta um teste de carga de verdade e de longa duração no binário Rust.
+
+- [ ] Memória sem limite sob carga de escrita (JavaScript e Rust): cada POST de reserva com chave de idempotência nova guarda a resposta para sempre, inclusive a "indisponivel" (grande). Medido no Rust: 6 MB parado, 391 MB após 90 s e ~685 mil requisições (~4 MB/s); JavaScript no mesmo ritmo. Propor validade das chaves (24 h) ou teto por empresa e decidir com o João, porque muda o contrato da idempotência. Ao ir para D1, o `UNIQUE (empresa_id, chave)` precisa de limpeza por data.
 
 ## 🧠 Aprendizados importantes
 - Design system foi montado a partir de 9 telas do Hotel Demonstração (Atendimento, Gestão, Operação, A&B) e do PDF de 10/11/2026; nada veio do código-fonte.
@@ -112,6 +115,9 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - Régua de contrato: `tests/api.test.js` roda em processo (padrão) ou contra qualquer binário com `ONE_SERVIDOR='["comando","arg"]'` (array JSON, sem shell). `KENDJI_SEMENTE_ARQUIVO` (JSON com empresas iniciais) existe nos dois servidores só para isso. Testes marcados `INTERNO` ficam pulados no modo externo. Rust: `rust/README.md`.
 - Rust: a API devolve JSON com a ordem das chaves do JavaScript (`serde_json` com `preserve_order`); eventos de histórico são montados com `evento()` para repetir a ordem de `{ ...a, ...b }`. `Map::remove` embaralha a ordem: use `shift_remove`. `dyn FonteCorpo` precisa de `Send + Sync` para o axum aceitar o handler.
 
+- Rust: `Repositorio::empresa_obter` devolve cópia; por isso o conhecimento (documentos de até 4 MB) fica fora de `Empresa`, em `Estado.conhecimento`. Não coloque dados grandes dentro de `Empresa`. A prova de wasm exige `#[unsafe(no_mangle)]`, então o crate `one-wasm-prova` não herda o `unsafe_code = forbid` do workspace.
+- Em Windows, o teste de carga lê a memória com `Get-Process`; matar processos por nome (`pkill`, `Stop-Process -Name`) pode derrubar o servidor de outra sessão: mate só o PID que você subiu.
+
 ## 🚫 Armadilhas conhecidas
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.
 - Não usar travessão em textos para cliente e prompts de agente (regra do README do design system).
@@ -124,6 +130,7 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - Plano tela 01: `docs/plano-01-atendimento-conversas.md` (versão completa com PDF e dados necessários; `docs/plano-tela-01.md` é a primeira versão)
 
 ## 📚 Histórico recente
+- 2026-11-15 — TASK-008: one-core em wasm32 (prova executada no Node), KENDJI_FUSO no Rust, teste de carga (60 s, 5000 conexões, 0 erros) e achado de crescimento de memória por idempotência
 - 2026-11-15 — TASK-007 fase 1: API do ONE em Rust (workspace `rust/`), régua de contrato HTTP independente da implementação, 34/34 JS e Rust, 109 requisições sem diferença
 - 2026-11-15 — TASK-006: o corpo só é lido depois de autenticar (`req.lerCorpo(limite)` sob demanda; 413 com JSON no limite da rota; corpo não pedido é descartado, não guardado); 51 testes
 - 2026-11-15 — TASK-005: ONE pronto para portar (ESM, plataforma injetável, núcleo `tratar`, adaptador Node, repositório com operações atômicas, datas sem fuso, testes de portabilidade); 48 testes, simulador do NicoChat verificado contra `node src/server.js`
