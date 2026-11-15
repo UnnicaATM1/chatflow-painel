@@ -1,0 +1,220 @@
+// Repositório: a única camada que enxerga como os dados são guardados. Hoje, memória.
+// Amanhã, D1 (registros) e R2 (arquivos): troca só este arquivo; o núcleo e os serviços não mudam.
+//
+// Regras do contrato:
+//  - Toda função é async (D1 é assíncrono). O que devolve é para LEITURA: quem precisa mudar algo chama uma operação nomeada.
+//  - As operações marcadas ATÔMICA fazem tudo-ou-nada (no D1: uma transação ou `batch`). Ver docs/atomicidade.md.
+//  - O repositório não conhece HTTP, papéis nem permissões; só dados e invariantes (sobreposição de mesa, id único, limites).
+
+import { plataformaWeb } from './plataforma.js';
+
+function congelar(o) {
+  if (o && typeof o === 'object') { Object.values(o).forEach(congelar); Object.freeze(o); }
+  return o;
+}
+
+const MODULOS_PADRAO = { reservas: true, conhecimento: true };
+
+// opcoes.plat: plataforma (padrão: Web API). opcoes.sink: função chamada com cada evento de histórico gravado
+// (o adaptador Node usa para gravar em arquivo); o núcleo só chama sink(evento).
+export function criarRepositorioMemoria({ plat, sink } = {}) {
+  const p = plat || plataformaWeb();
+  const empresas = new Map(); // id -> { id, nome, agente, ambientes, modulos, chave, conhecimento: [], proxConhecimento }
+  let reservas = []; // { id, empresaId, mesaId, ambiente, data, horario, pessoas, inicio, fim (minutos absolutos), status, nomeCliente?, contato? }
+  const idempotencia = new Map(); // `${empresaId}:${chave}` -> resposta
+  const historico = [];
+  const boot = p.uuid();
+  let seqReserva = 0;
+  let tentativasAdmin = { n: 0, ate: 0 };
+
+  const sobrepoe = (r, mesaId, ini, fim, ignorarId) =>
+    r.id !== ignorarId && r.mesaId === mesaId && r.status === 'confirmada' && ini < r.fim && fim > r.inicio;
+  const ocupada = (empresaId, mesaId, ini, fim, ignorarId) =>
+    reservas.some((r) => r.empresaId === empresaId && sobrepoe(r, mesaId, ini, fim, ignorarId));
+
+  return {
+    plat: p,
+
+    // ---------- empresas ----------
+    async empresaObter(id) { return empresas.get(id) || null; },
+    async empresaListar() { return [...empresas.values()]; },
+    async empresaCriar({ id, nome, agente, ambientes, modulos }) {
+      const e = { id, nome, agente, ambientes, chave: null, modulos: { ...MODULOS_PADRAO, ...(modulos || {}) }, conhecimento: [], proxConhecimento: 1 };
+      empresas.set(id, e);
+      return e;
+    },
+    // Próximo id livre. Ids de empresa nunca são reaproveitados: também confere o histórico (empresas excluídas).
+    async empresaProximoId() {
+      let n = empresas.size + 1;
+      while (empresas.has(`empresa_${n}`) || historico.some((e) => e.empresaId === `empresa_${n}`)) n++;
+      return `empresa_${n}`;
+    },
+    async empresaNomeEmUso(nome, ignorarId) {
+      return [...empresas.values()].some((x) => x.id !== ignorarId && x.nome.toLowerCase() === nome.toLowerCase());
+    },
+    async empresaRenomear(id, nome) {
+      const e = empresas.get(id);
+      const antes = e.nome;
+      e.nome = nome;
+      return { antes, depois: nome };
+    },
+    async empresaModulosDefinir(id, modulos) {
+      const e = empresas.get(id);
+      Object.assign(e.modulos, modulos);
+      return { ...e.modulos };
+    },
+    async agenteAtualizar(id, mudancas) {
+      Object.assign(empresas.get(id).agente, mudancas);
+    },
+
+    // ---------- chave de API da empresa (só o hash é guardado) ----------
+    async chaveDefinir(id, chave) { empresas.get(id).chave = chave; },
+    async chaveRemover(id) { empresas.get(id).chave = null; },
+    // Autenticação: acha a empresa dona do hash (comparação em tempo constante).
+    async empresaPorChaveHash(hash) {
+      for (const e of empresas.values()) if (e.chave && p.iguaisTempoConstante(hash, e.chave.hash)) return e.id;
+      return null;
+    },
+
+    // ---------- ambientes e mesas ----------
+    // { ok: true } | { ok: false, motivo: 'duplicado' }
+    async ambienteCriar(empresaId, nome) {
+      const e = empresas.get(empresaId);
+      if (e.ambientes.some((a) => a.nome.toLowerCase() === nome.toLowerCase())) return { ok: false, motivo: 'duplicado' };
+      e.ambientes.push({ nome, mesas: [] });
+      return { ok: true };
+    },
+    // Cria a mesa com o próximo id livre (letra do ambiente + número). Devolve a mesa ou null se o ambiente não existe.
+    async mesaCriar(empresaId, ambienteNome, { capacidade, reservavel }) {
+      const e = empresas.get(empresaId);
+      const amb = e.ambientes.find((a) => a.nome === ambienteNome);
+      if (!amb) return null;
+      const base = (amb.nome.match(/[A-Za-z]/) || ['M'])[0].toUpperCase();
+      const existentes = new Set(e.ambientes.flatMap((a) => a.mesas.map((m) => m.id)));
+      let n = 1;
+      while (existentes.has(`${base}${n}`)) n++;
+      const mesa = { id: `${base}${n}`, capacidade, reservavel: reservavel !== false };
+      amb.mesas.push(mesa);
+      return mesa;
+    },
+    // Devolve { antes, mesa } ou null se a mesa não existe.
+    async mesaEditar(empresaId, mesaId, { capacidade, reservavel }) {
+      const mesa = empresas.get(empresaId).ambientes.flatMap((a) => a.mesas).find((m) => m.id === mesaId);
+      if (!mesa) return null;
+      const antes = { capacidade: mesa.capacidade, reservavel: mesa.reservavel };
+      if (capacidade !== undefined) mesa.capacidade = capacidade;
+      if (reservavel !== undefined) mesa.reservavel = reservavel;
+      return { antes, mesa };
+    },
+
+    // ---------- reservas ----------
+    async reservaListar(empresaId, { data } = {}) {
+      return reservas.filter((r) => r.empresaId === empresaId && (!data || r.data === data));
+    },
+    async reservaObter(empresaId, id) { return reservas.find((x) => x.id === id && x.empresaId === empresaId) || null; },
+    // Reservas confirmadas da empresa (menos `ignorarId`): base para calcular mesas livres e o mapa.
+    async reservaConfirmadas(empresaId, ignorarId) {
+      return reservas.filter((r) => r.empresaId === empresaId && r.status === 'confirmada' && r.id !== ignorarId);
+    },
+    // ATÔMICA. Reserva a primeira mesa livre da lista `candidatas` ([{ mesaId, ambiente }], em ordem de preferência):
+    //   1) se a chave de idempotência já tem resposta, devolve { criada: false, resposta };
+    //   2) rechecando a sobreposição agora, insere a reserva na primeira candidata livre e guarda a resposta da chave;
+    //   3) se todas foram tomadas nesse meio-tempo, devolve { conflito: true } (nada gravado).
+    async reservaCriar({ empresaId, chave, candidatas, reserva }) {
+      const k = chave ? `${empresaId}:${chave}` : null;
+      if (k && idempotencia.has(k)) return { criada: false, resposta: idempotencia.get(k) };
+      for (const c of candidatas) {
+        if (ocupada(empresaId, c.mesaId, reserva.inicio, reserva.fim)) continue;
+        const r = { id: ++seqReserva, empresaId, mesaId: c.mesaId, ambiente: c.ambiente, ...reserva, status: 'confirmada' };
+        reservas.push(r);
+        const resposta = { status: 'confirmada', reservaId: r.id, mesa: r.mesaId, ambiente: r.ambiente };
+        if (k) idempotencia.set(k, resposta);
+        return { criada: true, resposta, reserva: r };
+      }
+      return { conflito: true };
+    },
+    // Guarda a resposta de uma chave de idempotência (usada para a resposta "indisponivel", que não grava reserva).
+    async idempotenciaObter(empresaId, chave) { return idempotencia.get(`${empresaId}:${chave}`) || null; },
+    async idempotenciaGravar(empresaId, chave, resposta) { idempotencia.set(`${empresaId}:${chave}`, resposta); },
+    // ATÔMICA. Muda pessoas/data/horário/mesa de uma reserva confirmada, rechecando a sobreposição. cliente: campos de nome/contato
+    // ('' apaga o campo). { ok: true, reserva } | { ok: false, motivo: 'conflito' }
+    async reservaEditar({ empresaId, id, dados, cliente }) {
+      const r = reservas.find((x) => x.id === id && x.empresaId === empresaId);
+      if (ocupada(empresaId, dados.mesaId, dados.inicio, dados.fim, id)) return { ok: false, motivo: 'conflito' };
+      Object.assign(r, dados, cliente || {});
+      for (const k of Object.keys(cliente || {})) if (cliente[k] === '') delete r[k];
+      return { ok: true, reserva: r };
+    },
+    // ATÔMICA. Cancela (libera a mesa). Devolve a reserva.
+    async reservaCancelar(empresaId, id) {
+      const r = reservas.find((x) => x.id === id && x.empresaId === empresaId);
+      r.status = 'cancelada';
+      return r;
+    },
+    // ATÔMICA. Reativa rechecando a sobreposição. { ok: true, reserva } | { ok: false, motivo: 'conflito' }
+    async reservaReativar(empresaId, id) {
+      const r = reservas.find((x) => x.id === id && x.empresaId === empresaId);
+      if (r.status === 'confirmada') return { ok: true, reserva: r };
+      if (ocupada(empresaId, r.mesaId, r.inicio, r.fim, id)) return { ok: false, motivo: 'conflito' };
+      r.status = 'confirmada';
+      return { ok: true, reserva: r };
+    },
+
+    // ---------- base de conhecimento ----------
+    async conhecimentoListar(empresaId) { return empresas.get(empresaId).conhecimento; },
+    async conhecimentoObter(empresaId, id) { return empresas.get(empresaId).conhecimento.find((x) => x.id === id) || null; },
+    // ATÔMICA (id sequencial + limite). { ok: true, item } | { ok: false, motivo: 'limite' }
+    async conhecimentoCriar(empresaId, item, maxItens) {
+      const e = empresas.get(empresaId);
+      if (e.conhecimento.length >= maxItens) return { ok: false, motivo: 'limite' };
+      const novo = { id: e.proxConhecimento, ...item };
+      e.proxConhecimento += 1;
+      e.conhecimento.push(novo);
+      return { ok: true, item: novo };
+    },
+    // `mudancas` entram por cima do item; chave com valor undefined é removida. Devolve o item ou null.
+    async conhecimentoEditar(empresaId, id, mudancas) {
+      const item = empresas.get(empresaId).conhecimento.find((x) => x.id === id);
+      if (!item) return null;
+      for (const [k, v] of Object.entries(mudancas)) { if (v === undefined) delete item[k]; else item[k] = v; }
+      return item;
+    },
+    async conhecimentoExcluir(empresaId, id) {
+      const e = empresas.get(empresaId);
+      const item = e.conhecimento.find((x) => x.id === id) || null;
+      if (item) e.conhecimento = e.conhecimento.filter((x) => x.id !== id);
+      return item;
+    },
+
+    // ---------- histórico (só acrescenta; não existe operação para alterar ou apagar eventos) ----------
+    async historicoAcrescentar(ev) {
+      const e = congelar({ seq: historico.length + 1, boot, quando: new Date(p.agora()).toISOString(), ...JSON.parse(JSON.stringify(ev)) });
+      historico.push(e);
+      if (sink) sink(e); // sumidouro de auditoria injetado pelo adaptador (arquivo, fila...); o núcleo só chama sink(evento)
+      return e;
+    },
+    async historicoListar(empresaId, { entidade, entidadeId, limite } = {}) {
+      const n = Math.min(Math.max(Number(limite) || 200, 1), 1000);
+      return historico
+        .filter((e) => e.empresaId === empresaId && (!entidade || e.entidade === entidade) && (!entidadeId || String(e.entidadeId) === String(entidadeId)))
+        .slice(-n)
+        .reverse();
+    },
+    async historicoObter(empresaId, seq) { return historico.find((e) => e.seq === seq && e.empresaId === empresaId) || null; },
+    async historicoDesfeito(empresaId, seq) { return historico.some((e) => e.empresaId === empresaId && e.acao === 'desfeita' && e.refSeq === seq); },
+    async historicoExcluidas() { return historico.filter((e) => e.acao === 'excluida' && e.entidade === 'empresa').reverse(); },
+
+    // ---------- exclusão de empresa ----------
+    // ATÔMICA. Apaga a empresa com tudo o que é dela (reservas, chaves de idempotência, conhecimento, chave de API)
+    // e grava o evento de auditoria junto. Devolve o evento gravado.
+    async empresaExcluir(id, evento) {
+      empresas.delete(id);
+      reservas = reservas.filter((r) => r.empresaId !== id);
+      for (const k of [...idempotencia.keys()]) if (k.startsWith(`${id}:`)) idempotencia.delete(k);
+      return this.historicoAcrescentar(evento);
+    },
+    // Bloqueio por tentativas erradas da senha do administrador (n erros, bloqueado até `ate` em ms).
+    async tentativasAdminObter() { return { ...tentativasAdmin }; },
+    async tentativasAdminGravar(t) { tentativasAdmin = { n: t.n, ate: t.ate }; },
+  };
+}

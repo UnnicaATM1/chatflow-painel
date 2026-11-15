@@ -73,10 +73,10 @@ Para reservar: 1) pergunte data, horário, número de pessoas e o ambiente prefe
   return p.trim() + '\n';
 }
 
-function contexto(store, empresaId) {
-  const e = empresa(store, empresaId);
-  const agente = lerConfig(store, empresaId);
-  const itens = e.modulos.conhecimento ? conhecimento.listarPublico(store, empresaId) : [];
+async function contexto(store, empresaId) {
+  const e = await empresa(store, empresaId);
+  const agente = await lerConfig(store, empresaId);
+  const itens = e.modulos.conhecimento ? await conhecimento.listarPublico(store, empresaId) : [];
   const r = recursosDe(e);
   return {
     empresa: { id: e.id, nome: e.nome },

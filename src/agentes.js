@@ -1,5 +1,3 @@
-'use strict';
-
 // Campos do agente (todos texto livre) e limite de caracteres de cada um.
 const LIMITES = {
   nome: 100, // Nome do agente
@@ -15,15 +13,16 @@ function erro(msg, codigo) {
   return Object.assign(new Error(msg), { codigo });
 }
 
-function empresa(store, id) {
-  const l = store.empresas.get(id);
+// Registro da empresa (somente leitura) ou 404.
+export async function empresa(store, id) {
+  const l = await store.empresaObter(id);
   if (!l) throw erro('empresa inexistente', 404);
   return l;
 }
 
-// Leitura somente leitura: devolve o bloco inteiro da empresa, sempre com os 5 campos.
-function lerConfig(store, empresaId) {
-  const a = empresa(store, empresaId).agente;
+// Leitura somente leitura: devolve o bloco inteiro da empresa, sempre com os campos.
+export async function lerConfig(store, empresaId) {
+  const a = (await empresa(store, empresaId)).agente;
   const out = {};
   for (const c of CAMPOS) out[c] = typeof a[c] === 'string' ? a[c] : '';
   return out;
@@ -43,16 +42,16 @@ function checar(a, campo, valor, papel) {
 }
 
 // Salva vários campos de uma vez, tudo ou nada: se um falhar, nenhum é gravado.
-function atualizarVarios(store, empresaId, mudancas, papel) {
-  const a = empresa(store, empresaId).agente;
+export async function atualizarVarios(store, empresaId, mudancas, papel) {
+  const a = (await empresa(store, empresaId)).agente;
   const campos = Object.keys(mudancas || {});
   if (campos.length === 0) throw erro('nenhum campo informado', 400);
   for (const c of campos) checar(a, c, mudancas[c], papel);
-  for (const c of campos) a[c] = mudancas[c];
+  await store.agenteAtualizar(empresaId, Object.fromEntries(campos.map((c) => [c, mudancas[c]])));
 }
 
-function atualizar(store, empresaId, campo, valor, papel) {
-  atualizarVarios(store, empresaId, { [campo]: valor }, papel);
+export async function atualizar(store, empresaId, campo, valor, papel) {
+  return atualizarVarios(store, empresaId, { [campo]: valor }, papel);
 }
 
-export { lerConfig, atualizar, atualizarVarios, empresa, LIMITES };
+export { LIMITES };

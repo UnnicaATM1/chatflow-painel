@@ -9,7 +9,7 @@ const T = { chat: 'tc', cliente: 'tcl', integracao: 'ti' };
 
 async function subir(opcoes = {}) {
   const s = criarStore();
-  addEmpresa(s, {
+  await addEmpresa(s, {
     id: 'empresa_1', nome: 'empresa_1',
     ambientes: [{ nome: 'salao', mesas: [{ id: 'S1', capacidade: 4, reservavel: true }] }],
     agente: { descricao: 'd', personalidade: '', habilidades: '', produtos: '', restricoes: 'r', editavelPor: { nome: ['cliente', 'integracao'], descricao: ['cliente', 'integracao'], personalidade: ['cliente', 'integracao'], restricoes: ['cliente', 'integracao'] } },
@@ -376,14 +376,14 @@ test('excluir empresa: bloqueio após erros de senha e desativado sem senha conf
 
   // servidor sem senha de administrador: exclusão desativada
   const s = criarStore();
-  addEmpresa(s, { id: 'empresa_1', nome: 'empresa_1', ambientes: [], agente: {} });
+  await addEmpresa(s, { id: 'empresa_1', nome: 'empresa_1', ambientes: [], agente: {} });
   const srv = criarServidor(s, T);
   await new Promise((r) => srv.listen(0, r));
   const r = await fetch(`http://127.0.0.1:${srv.address().port}/empresas/empresa_1/excluir`, {
     method: 'POST', headers: { Authorization: `Bearer ${T.cliente}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ senha: '', confirmarNome: 'empresa_1' }),
   });
   assert.strictEqual(r.status, 503);
-  assert.strictEqual(s.empresas.size, 1);
+  assert.strictEqual((await s.empresaListar()).length, 1);
   srv.close();
 });
 

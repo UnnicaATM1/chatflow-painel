@@ -1,24 +1,21 @@
-'use strict';
-
 import { empresa } from './agentes.js';
 import { minutosAbsolutos } from './tempo.js';
 
-const DURACAO_MIN = 90;
+export const DURACAO_MIN = 90;
 
 function inicio(data, horario) {
   return minutosAbsolutos(data, horario);
 }
 
-function livres(store, l, data, horario, pessoas, ambiente, ignorarId) {
+// Pura: mesas livres de `l` (registro da empresa) no horário, dadas as reservas `confirmadas` da empresa.
+export function livres(l, confirmadas, data, horario, pessoas, ambiente) {
   const i = inicio(data, horario);
   const out = [];
   for (const amb of l.ambientes) {
     if (ambiente && amb.nome !== ambiente) continue;
     for (const m of amb.mesas) {
       if (!m.reservavel || m.capacidade < pessoas) continue;
-      const ocupada = store.reservas.some(
-        (r) => r.id !== ignorarId && r.empresaId === l.id && r.mesaId === m.id && r.status === 'confirmada' && i < r.fim && i + DURACAO_MIN > r.inicio
-      );
+      const ocupada = confirmadas.some((r) => r.mesaId === m.id && i < r.fim && i + DURACAO_MIN > r.inicio);
       if (!ocupada) out.push({ mesa: m, ambiente: amb.nome });
     }
   }
@@ -26,11 +23,12 @@ function livres(store, l, data, horario, pessoas, ambiente, ignorarId) {
 }
 
 // Mesas ainda livres no horário, agrupadas pelos ambientes do layout da empresa.
-function disponibilidade(store, empresaId, data, horario, pessoas, ignorarId) {
-  const l = empresa(store, empresaId);
+export async function disponibilidade(store, empresaId, data, horario, pessoas, ignorarId) {
+  const l = await empresa(store, empresaId);
   if (!Number.isInteger(pessoas) || pessoas < 1) throw new Error('pessoas inválido');
   const porAmbiente = new Map(l.ambientes.map((a) => [a.nome, []]));
-  for (const x of livres(store, l, data, horario, pessoas, undefined, ignorarId)) {
+  const confirmadas = await store.reservaConfirmadas(empresaId, ignorarId);
+  for (const x of livres(l, confirmadas, data, horario, pessoas)) {
     porAmbiente.get(x.ambiente).push({ id: x.mesa.id, capacidade: x.mesa.capacidade });
   }
   return {
@@ -41,7 +39,7 @@ function disponibilidade(store, empresaId, data, horario, pessoas, ignorarId) {
 function erro(msg, codigo) { return Object.assign(new Error(msg), { codigo }); }
 
 // Dados do cliente que o chat conhece (opcionais): nome até 80 e contato (telefone ou e-mail) até 40 caracteres.
-function validarCliente(d) {
+export function validarCliente(d) {
   const out = {};
   for (const [campo, max] of [['nomeCliente', 80], ['contato', 40]]) {
     if (d[campo] === undefined || d[campo] === null) continue;
@@ -53,51 +51,62 @@ function validarCliente(d) {
   return out;
 }
 
-function reservar(store, { empresaId, data, horario, pessoas, ambiente, mesaId, chave, nomeCliente, contato }) {
-  const l = empresa(store, empresaId);
+// Como `reservar`, mas devolve também a reserva criada ({ resposta, criada }): `criada` é null quando a chave de
+// idempotência repetiu uma resposta anterior ou não havia mesa. Usado pelo núcleo para registrar o histórico.
+export async function reservarDetalhado(store, { empresaId, data, horario, pessoas, ambiente, mesaId, chave, nomeCliente, contato }) {
+  const l = await empresa(store, empresaId);
   if (!Number.isInteger(pessoas) || pessoas < 1) throw new Error('pessoas inválido');
   const cliente = validarCliente({ nomeCliente, contato });
 
-  const k = `${empresaId}:${chave}`;
-  if (chave && store.chaves.has(k)) return store.chaves.get(k);
+  if (chave) {
+    const antiga = await store.idempotenciaObter(empresaId, chave);
+    if (antiga) return { resposta: antiga, criada: null };
+  }
 
-  let ok = livres(store, l, data, horario, pessoas, ambiente);
+  const confirmadas = await store.reservaConfirmadas(empresaId);
+  let ok = livres(l, confirmadas, data, horario, pessoas, ambiente);
   if (mesaId) ok = ok.filter((x) => x.mesa.id === mesaId);
-  let res;
   if (ok.length) {
     ok.sort((a, b) => a.mesa.capacidade - b.mesa.capacidade);
-    const { mesa, ambiente: amb } = ok[0];
     const ini = inicio(data, horario);
-    const r = {
-      id: (store.seqReserva = (store.seqReserva || 0) + 1), empresaId, mesaId: mesa.id, ambiente: amb,
-      data, horario, pessoas, inicio: ini, fim: ini + DURACAO_MIN, status: 'confirmada', ...cliente,
-    };
-    store.reservas.push(r);
-    res = { status: 'confirmada', reservaId: r.id, mesa: mesa.id, ambiente: amb };
-  } else {
-    const alt = new Map();
-    if (ambiente) {
-      for (const x of livres(store, l, data, horario, pessoas)) {
-        alt.set(x.ambiente, { tipo: 'outro-ambiente', ambiente: x.ambiente });
-      }
-    }
-    res = { status: 'indisponivel', alternativas: [...alt.values()], disponibilidade: disponibilidade(store, empresaId, data, horario, pessoas).ambientes };
+    const r = await store.reservaCriar({
+      empresaId, chave,
+      candidatas: ok.map((x) => ({ mesaId: x.mesa.id, ambiente: x.ambiente })),
+      reserva: { data, horario, pessoas, inicio: ini, fim: ini + DURACAO_MIN, ...cliente },
+    });
+    if (r.resposta) return { resposta: r.resposta, criada: r.criada ? r.reserva : null };
+    // conflito: a mesa foi tomada entre a leitura e a gravação; cai na resposta "indisponivel" com a situação atual
   }
-  if (chave) store.chaves.set(k, res);
-  return res;
+  const alt = new Map();
+  if (ambiente) {
+    for (const x of livres(l, await store.reservaConfirmadas(empresaId), data, horario, pessoas)) {
+      alt.set(x.ambiente, { tipo: 'outro-ambiente', ambiente: x.ambiente });
+    }
+  }
+  const res = { status: 'indisponivel', alternativas: [...alt.values()], disponibilidade: (await disponibilidade(store, empresaId, data, horario, pessoas)).ambientes };
+  if (chave) await store.idempotenciaGravar(empresaId, chave, res);
+  return { resposta: res, criada: null };
 }
 
-function achar(store, empresaId, id) {
-  empresa(store, empresaId);
-  const r = store.reservas.find((x) => x.id === id && x.empresaId === empresaId);
+export async function reservar(store, dados) {
+  return (await reservarDetalhado(store, dados)).resposta;
+}
+
+async function achar(store, empresaId, id) {
+  await empresa(store, empresaId);
+  const r = await store.reservaObter(empresaId, id);
   if (!r) throw erro('reserva inexistente', 404);
   return r;
 }
 
+async function indisponivel(store, empresaId, data, horario, pessoas, ignorarId) {
+  return { status: 'indisponivel', disponibilidade: (await disponibilidade(store, empresaId, data, horario, pessoas, ignorarId)).ambientes };
+}
+
 // Edita pessoas, data, horário e/ou mesa. Sem mesaId, mantém a mesa atual se ainda servir.
-function editarReserva(store, empresaId, id, mudancas) {
-  const l = empresa(store, empresaId);
-  const r = achar(store, empresaId, id);
+export async function editarReserva(store, empresaId, id, mudancas) {
+  const l = await empresa(store, empresaId);
+  const r = await achar(store, empresaId, id);
   if (r.status !== 'confirmada') throw erro('reserva cancelada; reative antes de editar', 409);
   const pessoas = mudancas.pessoas !== undefined ? mudancas.pessoas : r.pessoas;
   const data = mudancas.data || r.data;
@@ -105,38 +114,37 @@ function editarReserva(store, empresaId, id, mudancas) {
   const mesaId = mudancas.mesaId || r.mesaId;
   if (!Number.isInteger(pessoas) || pessoas < 1) throw erro('pessoas inválido', 400);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(data) || !/^\d{2}:\d{2}$/.test(horario)) throw erro('data ou horário inválido', 400);
-  const alvo = livres(store, l, data, horario, pessoas, undefined, r.id).find((x) => x.mesa.id === mesaId);
-  if (!alvo) {
-    return { status: 'indisponivel', disponibilidade: disponibilidade(store, empresaId, data, horario, pessoas, r.id).ambientes };
-  }
+  const alvo = livres(l, await store.reservaConfirmadas(empresaId, r.id), data, horario, pessoas).find((x) => x.mesa.id === mesaId);
+  if (!alvo) return indisponivel(store, empresaId, data, horario, pessoas, r.id);
   const ini = inicio(data, horario);
   const cliente = validarCliente(mudancas);
-  Object.assign(r, { pessoas, data, horario, mesaId, ambiente: alvo.ambiente, inicio: ini, fim: ini + DURACAO_MIN }, cliente);
-  for (const k of Object.keys(cliente)) if (cliente[k] === '') delete r[k];
-  return { status: 'atualizada', reserva: publica(r) };
+  const res = await store.reservaEditar({
+    empresaId, id: r.id, cliente,
+    dados: { pessoas, data, horario, mesaId, ambiente: alvo.ambiente, inicio: ini, fim: ini + DURACAO_MIN },
+  });
+  if (!res.ok) return indisponivel(store, empresaId, data, horario, pessoas, r.id);
+  return { status: 'atualizada', reserva: publica(res.reserva) };
 }
 
-function cancelarReserva(store, empresaId, id) {
-  const r = achar(store, empresaId, id);
-  r.status = 'cancelada';
+export async function cancelarReserva(store, empresaId, id) {
+  await achar(store, empresaId, id);
+  const r = await store.reservaCancelar(empresaId, id);
   return { status: 'cancelada', reserva: publica(r) };
 }
 
-function reativarReserva(store, empresaId, id) {
-  const l = empresa(store, empresaId);
-  const r = achar(store, empresaId, id);
+export async function reativarReserva(store, empresaId, id) {
+  const l = await empresa(store, empresaId);
+  const r = await achar(store, empresaId, id);
   if (r.status === 'confirmada') return { status: 'confirmada', reserva: publica(r) };
-  const ok = livres(store, l, r.data, r.horario, r.pessoas, undefined, r.id).some((x) => x.mesa.id === r.mesaId);
-  if (!ok) return { status: 'indisponivel', disponibilidade: disponibilidade(store, empresaId, r.data, r.horario, r.pessoas, r.id).ambientes };
-  r.status = 'confirmada';
-  return { status: 'confirmada', reserva: publica(r) };
+  const ok = livres(l, await store.reservaConfirmadas(empresaId, r.id), r.data, r.horario, r.pessoas).some((x) => x.mesa.id === r.mesaId);
+  const res = ok ? await store.reservaReativar(empresaId, id) : { ok: false };
+  if (!res.ok) return indisponivel(store, empresaId, r.data, r.horario, r.pessoas, r.id);
+  return { status: 'confirmada', reserva: publica(res.reserva) };
 }
 
-function publica({ id, mesaId, ambiente, data, horario, pessoas, status, nomeCliente, contato }) {
+export function publica({ id, mesaId, ambiente, data, horario, pessoas, status, nomeCliente, contato }) {
   const o = { id, mesaId, ambiente, data, horario, pessoas, status };
   if (nomeCliente) o.nomeCliente = nomeCliente;
   if (contato) o.contato = contato;
   return o;
 }
-
-export { validarCliente, reservar, livres, disponibilidade, editarReserva, cancelarReserva, reativarReserva, publica, DURACAO_MIN };

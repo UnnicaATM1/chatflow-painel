@@ -1,18 +1,15 @@
-'use strict';
-
 import { empresa } from './agentes.js';
 import { DURACAO_MIN } from './reservas.js';
 import { minutosAbsolutos } from './tempo.js';
 
-function mapa(store, empresaId, data, horario) {
-  const l = empresa(store, empresaId);
+export async function mapa(store, empresaId, data, horario) {
+  const l = await empresa(store, empresaId);
   const i = minutosAbsolutos(data, horario);
+  const confirmadas = await store.reservaConfirmadas(empresaId);
   return l.ambientes.map((a) => ({
     ambiente: a.nome,
     mesas: a.mesas.map((m) => {
-      const r = store.reservas.find(
-        (x) => x.empresaId === empresaId && x.mesaId === m.id && x.status === 'confirmada' && i < x.fim && i + DURACAO_MIN > x.inicio
-      );
+      const r = confirmadas.find((x) => x.mesaId === m.id && i < x.fim && i + DURACAO_MIN > x.inicio);
       return {
         id: m.id,
         capacidade: m.capacidade,
@@ -22,5 +19,3 @@ function mapa(store, empresaId, data, horario) {
     }),
   }));
 }
-
-export { mapa };

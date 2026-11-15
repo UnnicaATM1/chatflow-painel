@@ -79,11 +79,11 @@ function lerArquivo(store, a) {
   return { arquivo: { nome, mime: regra.mime, tamanho: buffer.length, base64: a.base64 }, texto: extraido };
 }
 
-function achar(store, empresaId, id) {
-  const e = empresa(store, empresaId);
-  const item = e.conhecimento.find((x) => x.id === id);
+async function achar(store, empresaId, id) {
+  await empresa(store, empresaId);
+  const item = await store.conhecimentoObter(empresaId, id);
   if (!item) throw erro('item de conhecimento inexistente', 404);
-  return { e, item };
+  return { item };
 }
 
 // O que o sistema de conversa e a tela recebem (sem os bytes do arquivo).
@@ -106,23 +106,24 @@ function resumo(item) {
   return out;
 }
 
-function listarPublico(store, empresaId) {
-  const e = empresa(store, empresaId);
-  return e.conhecimento.map((i) => publica(empresaId, i));
+async function listarPublico(store, empresaId) {
+  await empresa(store, empresaId);
+  return (await store.conhecimentoListar(empresaId)).map((i) => publica(empresaId, i));
 }
 
-function obter(store, empresaId, id) {
-  const { item } = achar(store, empresaId, id);
+async function obter(store, empresaId, id) {
+  const { item } = await achar(store, empresaId, id);
   return publica(empresaId, item);
 }
 
-function criar(store, empresaId, dados) {
-  const e = empresa(store, empresaId);
+async function criar(store, empresaId, dados) {
+  await empresa(store, empresaId);
   if (!dados || typeof dados !== 'object') throw erro('corpo inválido', 400);
-  if (e.conhecimento.length >= LIM.itens) throw erro(`limite de ${LIM.itens} itens de conhecimento por empresa`, 400);
+  const limite = () => erro(`limite de ${LIM.itens} itens de conhecimento por empresa`, 400);
+  if ((await store.conhecimentoListar(empresaId)).length >= LIM.itens) throw limite();
   if (!TIPOS.includes(dados.tipo)) throw erro(`tipo deve ser um de: ${TIPOS.join(', ')}`, 400);
   const agora = new Date(store.plat.agora()).toISOString();
-  const item = { id: e.proxConhecimento, titulo: texto(dados.titulo, 'título', LIM.titulo, true).trim(), tipo: dados.tipo, criadoEm: agora, atualizadoEm: agora };
+  const item = { titulo: texto(dados.titulo, 'título', LIM.titulo, true).trim(), tipo: dados.tipo, criadoEm: agora, atualizadoEm: agora };
   if (dados.tipo === 'texto') item.texto = texto(dados.texto, 'texto', LIM.texto, true);
   if (dados.tipo === 'tabela') item.tabela = validarTabela(dados.tabela);
   if (dados.tipo === 'documento') {
@@ -130,13 +131,13 @@ function criar(store, empresaId, dados) {
     item.arquivo = l.arquivo;
     if (l.texto !== undefined) item.texto = l.texto;
   }
-  e.proxConhecimento += 1;
-  e.conhecimento.push(item);
-  return item;
+  const r = await store.conhecimentoCriar(empresaId, item, LIM.itens); // ATÔMICA: id sequencial + limite
+  if (!r.ok) throw limite();
+  return r.item;
 }
 
-function editar(store, empresaId, id, dados) {
-  const { item } = achar(store, empresaId, id);
+async function editar(store, empresaId, id, dados) {
+  const { item } = await achar(store, empresaId, id);
   if (!dados || typeof dados !== 'object') throw erro('corpo inválido', 400);
   if (dados.tipo !== undefined && dados.tipo !== item.tipo) throw erro('o tipo do item não pode ser alterado', 400);
   const novo = {};
@@ -149,19 +150,17 @@ function editar(store, empresaId, id, dados) {
     novo.texto = l.texto; // pode ser undefined (pdf/docx/xlsx): limpa o texto do arquivo anterior
   }
   if (Object.keys(novo).length === 0) throw erro('nenhuma alteração informada', 400);
-  Object.assign(item, novo, { atualizadoEm: new Date(store.plat.agora()).toISOString() });
-  if (item.tipo === 'documento' && item.texto === undefined) delete item.texto;
-  return item;
+  // texto undefined (pdf/docx/xlsx novo) limpa o texto do arquivo anterior: o repositório remove chaves undefined
+  return store.conhecimentoEditar(empresaId, id, { ...novo, atualizadoEm: new Date(store.plat.agora()).toISOString() });
 }
 
-function excluir(store, empresaId, id) {
-  const { e, item } = achar(store, empresaId, id);
-  e.conhecimento = e.conhecimento.filter((x) => x.id !== id);
-  return item;
+async function excluir(store, empresaId, id) {
+  await achar(store, empresaId, id);
+  return store.conhecimentoExcluir(empresaId, id);
 }
 
-function arquivoDe(store, empresaId, id) {
-  const { item } = achar(store, empresaId, id);
+async function arquivoDe(store, empresaId, id) {
+  const { item } = await achar(store, empresaId, id);
   if (!item.arquivo) throw erro('este item não tem arquivo', 404);
   return { nome: item.arquivo.nome, mime: item.arquivo.mime, buffer: store.plat.base64Decodificar(item.arquivo.base64) };
 }
@@ -176,18 +175,19 @@ function termos(q) {
 }
 const acertos = (texto, ts) => { const n = norm(texto); return ts.filter((t) => n.includes(t)).length; };
 
-function buscar(store, empresaId, consulta, limite = 5) {
-  const e = empresa(store, empresaId);
+async function buscar(store, empresaId, consulta, limite = 5) {
+  await empresa(store, empresaId);
+  const itens = await store.conhecimentoListar(empresaId);
   const q = typeof consulta === 'string' ? consulta.trim() : '';
   if (!q) throw erro('informe o assunto da busca em q', 400);
   if ([...q].length > 200) throw erro('a busca passa do limite de 200 caracteres', 400);
   const ts = termos(q);
   // pergunta genérica demais: devolve o catálogo para a IA escolher
   if (ts.length === 0) {
-    return { consulta: q, catalogo: true, total: e.conhecimento.length, resultados: e.conhecimento.map((i) => ({ id: i.id, titulo: i.titulo, tipo: i.tipo })) };
+    return { consulta: q, catalogo: true, total: itens.length, resultados: itens.map((i) => ({ id: i.id, titulo: i.titulo, tipo: i.tipo })) };
   }
   const out = [];
-  for (const it of e.conhecimento) {
+  for (const it of itens) {
     const noTitulo = acertos(it.titulo + ' ' + (it.arquivo ? it.arquivo.nome : ''), ts);
     if (it.tipo === 'tabela') {
       const linhas = it.tabela.linhas.map((l) => ({ l, s: acertos(l.join(' '), ts) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s);
