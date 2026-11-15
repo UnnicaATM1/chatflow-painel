@@ -164,3 +164,24 @@ Portar agora é justificável se concentrar tudo no Sites e obter persistência 
 - Validar KV/Durable Objects apenas se se tornarem necessários; não incluídos como capacidade garantida do Sites.
 - Único arquivo novo: `docs/portabilidade-worker.md`. Cada caminho de projeto citado e cada fonte local do plugin deve existir no disco; os links relativos são verificáveis sem acessar serviços.
 - Levantamento sem migração, sem nova execução de testes de código e sem publicação. O handoff e os arquivos dos outros executores foram preservados; o coordenador pode incorporar este resultado à continuidade do projeto.
+
+## Estado depois da TASK-005
+
+O código de `src/` ficou **independente do Node**, ainda rodando em Node (49 testes do contrato HTTP seguem verdes). O que está pronto:
+
+- **Plataforma injetável** (`src/plataforma.js`): relógio, uuid, aleatório, SHA-256, comparação em tempo constante e base64 entram por uma interface. Há duas implementações: `plataformaWeb()` (só Web API: `crypto.subtle`, `atob`/`btoa`, serve para Worker) e `src/node/plataforma.js` (`node:crypto`).
+- **Núcleo como função de requisição** (`src/nucleo.js`): `tratar(req, ctx) -> { status, headers, corpo }`, com roteamento, autenticação, CORS, limite de requisições, validações e histórico. Um adaptador `fetch` de Worker só precisa montar o `req` a partir de um `Request`, chamar `tratar` e montar o `Response`.
+- **Adaptador Node fino** (`src/node/servidor.js`) e inicialização (`src/node/inicializar.js`): lê o corpo, serve `web/` (só no Node; no Sites os assets são do Sites) e grava o histórico em arquivo (sink injetado).
+- **Repositório** (`src/repositorio.js`): toda leitura e escrita de dados passa por funções `async`, com a versão em memória. Operações que exigem atomicidade têm nome próprio (ver `docs/atomicidade.md`).
+- **Datas sem fuso** (`src/tempo.js`): sobreposição calculada em minutos absolutos (`Date.UTC`), sem `new Date('...T...')`. `KENDJI_FUSO` (padrão `America/Sao_Paulo`) é carregado, mas nenhuma regra compara reservas com "agora" ainda.
+- **Testes**: o núcleo é chamado direto, sem rede; a mesma bateria roda com as duas plataformas e pelo servidor Node com transcrição idêntica; um teste falha se algum arquivo de `src/` (fora de `src/node/`) usar `require(`, `node:`, `Buffer` ou `process.`.
+
+O que **falta** para publicar no Sites:
+
+1. **D1**: escrever `src/d1/repositorio.js` com a mesma interface de `src/repositorio.js` (esquema, migrações, índices de sobreposição por mesa, `UNIQUE` de idempotência e de `ref_seq` do histórico).
+2. **R2**: guardar os arquivos do conhecimento (hoje `arquivo.base64` dentro do item) e servir o download com os mesmos cabeçalhos.
+3. **Adaptador `fetch`**: `Request` para `req` e `{ status, headers, corpo }` para `Response`; ler `KENDJI_*` do `env` do Worker; `ctx.ip` vem de `CF-Connecting-IP`.
+4. **Assets**: publicar `web/` como estático do Sites (já é desacoplado por `web/config.js`); remover a dependência do servidor de arquivos do Node.
+5. **Limite de requisições compartilhado**: hoje em memória por instância (Durable Object ou KV).
+6. **Módulos**: confirmar se o Sites aceita ESM como está (`src/package.json` com `"type": "module"`) ou se precisa de bundle. Não verificado aqui.
+7. **Bloqueio de senha do administrador** e **desfazer** atômicos (lacunas listadas em `docs/atomicidade.md`).

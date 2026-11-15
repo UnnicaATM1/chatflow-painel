@@ -44,4 +44,5 @@ criarServidor(store, tokens, {
   // KENDJI_CORS_ORIGENS: origens do painel separadas por vírgula (lista exata). KENDJI_CONFIAR_PROXY=1: usar X-Forwarded-For.
   corsOrigens: (process.env.KENDJI_CORS_ORIGENS || '').split(','),
   confiarProxy: process.env.KENDJI_CONFIAR_PROXY === '1',
+  fuso: process.env.KENDJI_FUSO, // fuso de negócio (padrão America/Sao_Paulo); hoje só carregado, nenhuma regra usa "agora"
 }).listen(porta, () => console.log(`Kendji ONE API na porta ${porta}`));

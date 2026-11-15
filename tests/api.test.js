@@ -836,3 +836,169 @@ test('CORS: sem a variável, OPTIONS responde 204 sem nenhum cabeçalho Access-C
   assert.strictEqual(r.headers.get('vary'), null);
   fechar();
 });
+
+// ---- portabilidade (TASK-005): núcleo chamado direto, plataforma alternativa e núcleo sem Node ----
+
+const nucleoMod = require('../src/nucleo');
+const { plataformaWeb } = require('../src/plataforma');
+const { plataformaNode } = require('../src/node/plataforma');
+
+// Uma bateria de contrato escrita contra uma função `chamar(metodo, caminho, { token, corpo, headers })` que devolve
+// { status, headers, corpo }. Roda sobre tratar() direto e sobre o servidor Node; devolve a transcrição (sem segredos).
+async function bateria(chamar) {
+  const t = [];
+  const reg = (nome, r, extra) => t.push([nome, r.status, extra === undefined ? null : extra]);
+  const TOK = { token: 'ti-bat' };
+
+  reg('saude', await chamar('GET', '/saude'), (await chamar('GET', '/saude')).corpo);
+  reg('sem token', await chamar('GET', '/empresas'));
+  reg('rota inexistente', await chamar('GET', '/nada', TOK));
+  const criada = await chamar('POST', '/empresas', { ...TOK, corpo: { nome: 'Cantina Bateria' } });
+  reg('criar empresa', criada, criada.corpo);
+  const id = criada.corpo.id;
+  reg('nome repetido', await chamar('POST', '/empresas', { ...TOK, corpo: { nome: 'cantina bateria' } }));
+  reg('ambiente', await chamar('POST', `/empresas/${id}/ambientes`, { ...TOK, corpo: { nome: 'salao' } }));
+  const mesa = await chamar('POST', `/empresas/${id}/mesas`, { ...TOK, corpo: { ambiente: 'salao', capacidade: 4 } });
+  reg('mesa', mesa, mesa.corpo);
+
+  const res = { data: '2026-11-20', horario: '23:30', pessoas: 2, ambiente: 'salao' };
+  const a = await chamar('POST', `/empresas/${id}/reservas`, { ...TOK, corpo: res, headers: { 'idempotency-key': 'k1' } });
+  const b = await chamar('POST', `/empresas/${id}/reservas`, { ...TOK, corpo: res, headers: { 'idempotency-key': 'k1' } });
+  reg('reserva criada', a, a.corpo);
+  reg('reserva repetida (idempotente)', b, b.corpo);
+  const c = await chamar('POST', `/empresas/${id}/reservas`, { ...TOK, corpo: { ...res, data: '2026-11-21', horario: '00:30' }, headers: { 'idempotency-key': 'k2' } });
+  reg('cruza a meia-noite: indisponível', c, c.corpo.status);
+  reg('reserva sem chave', await chamar('POST', `/empresas/${id}/reservas`, { ...TOK, corpo: res }));
+  reg('corpo não-JSON', await chamar('POST', `/empresas/${id}/reservas`, { ...TOK, corpo: '{ruim', headers: { 'idempotency-key': 'k3' } }));
+  reg('data impossível', await chamar('GET', `/empresas/${id}/mapa?data=2026-02-30&horario=10:00`, TOK));
+
+  const conteudo = 'Preço da pizza: 50 reais';
+  const doc = await chamar('POST', `/empresas/${id}/conhecimento`, {
+    ...TOK, corpo: { tipo: 'documento', titulo: 'Cardápio', arquivo: { nome: 'cardapio.txt', base64: Buffer.from(conteudo).toString('base64') } },
+  });
+  reg('documento', doc, doc.corpo.arquivo.tamanho);
+  const arq = await chamar('GET', `/empresas/${id}/conhecimento/${doc.corpo.id}/arquivo`, TOK);
+  reg('download binário', arq, [arq.headers['x-content-type-options'], arq.headers['content-security-policy'], Buffer.from(arq.corpo).toString('utf8')]);
+  const pdfRuim = await chamar('POST', `/empresas/${id}/conhecimento`, { ...TOK, corpo: { tipo: 'documento', titulo: 'x', arquivo: { nome: 'x.pdf', base64: Buffer.from('nao e pdf').toString('base64') } } });
+  reg('pdf falso', pdfRuim, pdfRuim.corpo.erro);
+  const busca = await chamar('GET', `/empresas/${id}/conhecimento/buscar?q=pizza`, TOK);
+  reg('busca', busca, busca.corpo.total);
+
+  const chave = await chamar('POST', `/empresas/${id}/api/chave`, { ...TOK, corpo: {} });
+  reg('gerar chave', chave, Object.keys(chave.corpo).sort());
+  const comChave = await chamar('GET', `/empresas/${id}/agente`, { token: chave.corpo.chave });
+  reg('chave da empresa lê o agente', comChave);
+  reg('chave da empresa não vê outras rotas', await chamar('GET', '/empresas', { token: chave.corpo.chave }));
+  const hist = await chamar('GET', `/empresas/${id}/historico`, TOK);
+  reg('histórico', hist, hist.corpo.map((e) => e.acao).sort());
+  return t;
+}
+
+function chamarTratar(ctx) {
+  return async (metodo, caminho, { token, corpo, headers } = {}) => {
+    const bytes = corpo === undefined ? null : new TextEncoder().encode(typeof corpo === 'string' ? corpo : JSON.stringify(corpo));
+    const r = await nucleoMod.tratar({
+      metodo, url: caminho, ip: '127.0.0.1', corpo: bytes,
+      headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(headers || {}) },
+    }, ctx);
+    const h = Object.fromEntries(Object.entries(r.headers).map(([k, v]) => [k.toLowerCase(), v]));
+    return { status: r.status, headers: h, corpo: r.corpo };
+  };
+}
+
+function ctxCom(plat) {
+  const store = criarStore({ plat });
+  return nucleoMod.criarContexto({ store, tokens: { integracao: 'ti-bat' } });
+}
+
+test('núcleo: tratar() direto, sem rede, passa a bateria de contrato', async () => {
+  const t = await bateria(chamarTratar(ctxCom(plataformaNode())));
+  const status = Object.fromEntries(t.map(([n, s]) => [n, s]));
+  assert.strictEqual(status['saude'], 200);
+  assert.strictEqual(status['sem token'], 401);
+  assert.strictEqual(status['criar empresa'], 201);
+  assert.strictEqual(status['reserva criada'], 201);
+  assert.strictEqual(status['reserva repetida (idempotente)'], 201);
+  assert.strictEqual(status['download binário'], 200);
+  assert.strictEqual(status['pdf falso'], 400);
+  assert.strictEqual(status['data impossível'], 400);
+});
+
+test('núcleo: plataforma alternativa (crypto.subtle) dá exatamente o mesmo resultado que a do Node', async () => {
+  const noNode = await bateria(chamarTratar(ctxCom(plataformaNode())));
+  const web = await bateria(chamarTratar(ctxCom(plataformaWeb())));
+  assert.deepStrictEqual(web, noNode);
+});
+
+test('núcleo: a mesma bateria pelo servidor Node (adaptador) devolve a mesma transcrição', async () => {
+  const noNucleo = await bateria(chamarTratar(ctxCom(plataformaNode())));
+  const s = criarStore();
+  const srv = criarServidor(s, { integracao: 'ti-bat' });
+  await new Promise((r) => srv.listen(0, r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const http = async (metodo, caminho, { token, corpo, headers } = {}) => {
+    const r = await fetch(base + caminho, {
+      method: metodo,
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(corpo !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(headers || {}) },
+      body: corpo === undefined ? undefined : (typeof corpo === 'string' ? corpo : JSON.stringify(corpo)),
+    });
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const tipo = r.headers.get('content-type') || '';
+    return { status: r.status, headers: Object.fromEntries(r.headers.entries()), corpo: tipo.startsWith('application/json') ? JSON.parse(new TextDecoder().decode(buf)) : buf };
+  };
+  const viaHttp = await bateria(http);
+  srv.close();
+  assert.deepStrictEqual(viaHttp, noNucleo);
+});
+
+test('plataformas: sha256, base64 (4 MB), tempo constante e aleatório são equivalentes', async () => {
+  const pn = plataformaNode(), pw = plataformaWeb();
+  assert.strictEqual(await pn.sha256Hex('chave-secreta'), await pw.sha256Hex('chave-secreta'));
+  assert.strictEqual(await pw.sha256Hex(''), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+  const grande = new Uint8Array(4 * 1024 * 1024).map((_, i) => (i * 31) % 251);
+  const b64 = pw.base64Codificar(grande);
+  assert.strictEqual(b64, pn.base64Codificar(grande));
+  assert.deepStrictEqual(pw.base64Decodificar(b64), grande);
+  assert.deepStrictEqual(pn.base64Decodificar(b64), grande);
+  for (const p of [pn, pw]) {
+    assert.deepStrictEqual(Array.from(p.base64Decodificar('QUJD\nREVG')), [65, 66, 67, 68, 69, 70], 'tolera quebra de linha');
+    assert.deepStrictEqual(Array.from(p.base64Decodificar('QQ')), [65], 'tolera falta de padding');
+    assert.throws(() => p.base64Decodificar('A$B='), /base64/);
+    assert.throws(() => p.base64Decodificar('A'), /base64/);
+    assert.strictEqual(p.iguaisTempoConstante('abc', 'abc'), true);
+    assert.strictEqual(p.iguaisTempoConstante('abc', 'abd'), false);
+    assert.strictEqual(p.iguaisTempoConstante('abc', 'abcd'), false);
+    assert.match(p.aleatorio(32), /^[A-Za-z0-9_-]{43}$/);
+    assert.notStrictEqual(p.aleatorio(32), p.aleatorio(32));
+    assert.match(p.uuid(), /^[0-9a-f-]{36}$/);
+  }
+});
+
+test('núcleo sem Node: nenhum arquivo de src/ (fora de src/node/) usa require(, node:, Buffer ou process.', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = path.join(__dirname, '..', 'src');
+  const arquivos = fs.readdirSync(dir).filter((f) => f.endsWith('.js'));
+  assert.ok(arquivos.includes('nucleo.js') && arquivos.includes('repositorio.js') && arquivos.includes('plataforma.js'));
+  const semComentarios = (txt) => txt.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/(^|[^:'"`\\])\/\/.*$/, '$1')).join('\n');
+  const proibidos = [/\brequire\(/, /node:/, /\bBuffer\b/, /\bprocess\./];
+  for (const f of arquivos) {
+    const codigo = semComentarios(fs.readFileSync(path.join(dir, f), 'utf8'));
+    for (const re of proibidos) assert.ok(!re.test(codigo), `${f} usa ${re}`);
+  }
+  // e o adaptador, ao contrário, é onde o Node vive
+  assert.match(fs.readFileSync(path.join(dir, 'node', 'servidor.js'), 'utf8'), /node:http/);
+});
+
+test('repositório: reservaCriar rechecando a sobreposição devolve conflito e não grava nada', async () => {
+  const s = criarStore();
+  await addEmpresa(s, { id: 'empresa_1', nome: 'E', ambientes: [{ nome: 'salao', mesas: [{ id: 'S1', capacidade: 4, reservavel: true }] }], agente: {} });
+  const entrada = (inicio, chave) => ({ empresaId: 'empresa_1', chave, candidatas: [{ mesaId: 'S1', ambiente: 'salao' }], reserva: { data: '2026-11-20', horario: '20:00', pessoas: 2, inicio, fim: inicio + 90 } });
+  const a = await s.reservaCriar(entrada(1000, 'k1'));
+  assert.strictEqual(a.criada, true);
+  const rep = await s.reservaCriar(entrada(1000, 'k1'));
+  assert.deepStrictEqual([rep.criada, rep.resposta], [false, a.resposta]);
+  assert.deepStrictEqual(await s.reservaCriar(entrada(1089, 'k2')), { conflito: true });
+  assert.strictEqual((await s.reservaCriar(entrada(1090, 'k3'))).criada, true);
+  assert.strictEqual((await s.reservaListar('empresa_1')).length, 2);
+});
