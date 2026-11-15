@@ -167,7 +167,7 @@ Portar agora é justificável se concentrar tudo no Sites e obter persistência 
 
 ## Estado depois da TASK-005
 
-O código de `src/` ficou **independente do Node**, ainda rodando em Node (49 testes do contrato HTTP seguem verdes). O que está pronto:
+O código de `src/` ficou **independente do Node**, ainda rodando em Node (48 testes seguem verdes). O que está pronto:
 
 - **Plataforma injetável** (`src/plataforma.js`): relógio, uuid, aleatório, SHA-256, comparação em tempo constante e base64 entram por uma interface. Há duas implementações: `plataformaWeb()` (só Web API: `crypto.subtle`, `atob`/`btoa`, serve para Worker) e `src/node/plataforma.js` (`node:crypto`).
 - **Núcleo como função de requisição** (`src/nucleo.js`): `tratar(req, ctx) -> { status, headers, corpo }`, com roteamento, autenticação, CORS, limite de requisições, validações e histórico. Um adaptador `fetch` de Worker só precisa montar o `req` a partir de um `Request`, chamar `tratar` e montar o `Response`.
