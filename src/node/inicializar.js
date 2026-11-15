@@ -31,6 +31,11 @@ for (const n of demo ? [1, 2, 3] : []) {
   });
 }
 
+// KENDJI_SEMENTE_ARQUIVO (só para testes de contrato): JSON com a lista de empresas iniciais (mesmos campos de addEmpresa).
+if (process.env.KENDJI_SEMENTE_ARQUIVO) {
+  for (const e of JSON.parse(fs.readFileSync(process.env.KENDJI_SEMENTE_ARQUIVO, 'utf8'))) await addEmpresa(store, e);
+}
+
 // KENDJI_TOKEN_CHAT é opcional e legado: uma chave global do chat vê TODAS as empresas. Prefira a chave de API de cada empresa.
 const tokens = {
   chat: process.env.KENDJI_TOKEN_CHAT,

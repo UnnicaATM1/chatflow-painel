@@ -7,23 +7,78 @@ const { criarServidor } = require('../src/api');
 
 const T = { chat: 'tc', cliente: 'tcl', integracao: 'ti' };
 
+// Régua de contrato (docs/migracao-rust.md): sem ONE_SERVIDOR, o servidor sobe em processo (src/api.js).
+// Com ONE_SERVIDOR (array JSON do comando, ex.: ["node","src/server.js"] ou ["C:/.../one-node.exe"]),
+// cada teste sobe esse comando como processo filho, com a empresa de teste semeada por KENDJI_SEMENTE_ARQUIVO,
+// e conversa só por HTTP. Os mesmos testes valem para o JavaScript e para o binário Rust.
+const EXTERNO = process.env.ONE_SERVIDOR ? JSON.parse(process.env.ONE_SERVIDOR) : null;
+// Testes que só fazem sentido dentro do processo do JavaScript (núcleo, repositório, plataforma, relógio injetado)
+const INTERNO = { skip: EXTERNO ? 'teste interno do JavaScript (fora da régua de contrato HTTP)' : false };
+
+const FILHOS = new Set();
+process.on('exit', () => { for (const c of FILHOS) { try { c.kill(); } catch { /* já saiu */ } } });
+
+const SEMENTE_PADRAO = [{
+  id: 'empresa_1', nome: 'empresa_1',
+  ambientes: [{ nome: 'salao', mesas: [{ id: 'S1', capacidade: 4, reservavel: true }] }],
+  agente: { descricao: 'd', personalidade: '', habilidades: '', produtos: '', restricoes: 'r', editavelPor: { nome: ['cliente', 'integracao'], descricao: ['cliente', 'integracao'], personalidade: ['cliente', 'integracao'], restricoes: ['cliente', 'integracao'] } },
+}];
+
+// Sobe o comando (ONE_SERVIDOR ou `node src/server.js`) como processo filho e espera /saude responder.
+async function lancar(env) {
+  const { spawn } = require('node:child_process');
+  const net = require('node:net');
+  const porta = await new Promise((r) => { const l = net.createServer().listen(0, () => { const p = l.address().port; l.close(() => r(p)); }); });
+  const cmd = EXTERNO || [process.execPath, require('node:path').join(__dirname, '..', 'src', 'server.js')];
+  const base = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, PORT: String(porta) };
+  const filho = spawn(cmd[0], cmd.slice(1), { env: { ...base, ...env }, stdio: ['ignore', 'ignore', 'inherit'], shell: false });
+  FILHOS.add(filho);
+  let saiu = false;
+  filho.once('exit', () => { saiu = true; });
+  const url = `http://127.0.0.1:${porta}`;
+  const limite = Date.now() + 15000;
+  for (;;) {
+    if (saiu) throw new Error('o servidor saiu antes de ficar pronto');
+    try { if ((await fetch(`${url}/saude`)).status === 200) break; } catch { /* ainda subindo */ }
+    if (Date.now() > limite) { filho.kill(); throw new Error('o servidor não respondeu /saude em 15 s'); }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return { base: url, fechar: () => { FILHOS.delete(filho); filho.kill(); } };
+}
+
+// opcoes: corsOrigens, confiarProxy, adminSenha (null = sem senha), semente (empresas iniciais), agora (só em processo).
 async function subir(opcoes = {}) {
-  const s = criarStore();
-  await addEmpresa(s, {
-    id: 'empresa_1', nome: 'empresa_1',
-    ambientes: [{ nome: 'salao', mesas: [{ id: 'S1', capacidade: 4, reservavel: true }] }],
-    agente: { descricao: 'd', personalidade: '', habilidades: '', produtos: '', restricoes: 'r', editavelPor: { nome: ['cliente', 'integracao'], descricao: ['cliente', 'integracao'], personalidade: ['cliente', 'integracao'], restricoes: ['cliente', 'integracao'] } },
-  });
-  const srv = criarServidor(s, T, { adminSenha: 'senha-de-teste', ...opcoes });
-  await new Promise((r) => srv.listen(0, r));
-  const base = `http://127.0.0.1:${srv.address().port}`;
+  const { semente = SEMENTE_PADRAO, adminSenha = 'senha-de-teste', ...resto } = opcoes;
+  let base, fechar;
+  if (EXTERNO && !resto.agora) {
+    const fs = require('node:fs');
+    const arq = require('node:path').join(require('node:os').tmpdir(), `one-semente-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+    fs.writeFileSync(arq, JSON.stringify(semente));
+    const env = {
+      KENDJI_TOKEN_CHAT: T.chat, KENDJI_TOKEN_CLIENTE: T.cliente, KENDJI_TOKEN_INTEGRACAO: T.integracao,
+      KENDJI_SEMENTE_ARQUIVO: arq,
+      ...(adminSenha ? { KENDJI_ADMIN_SENHA: adminSenha } : {}),
+      ...(resto.corsOrigens ? { KENDJI_CORS_ORIGENS: resto.corsOrigens.join(',') } : {}),
+      ...(resto.confiarProxy ? { KENDJI_CONFIAR_PROXY: '1' } : {}),
+    };
+    const srv = await lancar(env);
+    base = srv.base;
+    fechar = () => { srv.fechar(); try { fs.unlinkSync(arq); } catch { /* já apagado */ } };
+  } else {
+    const s = criarStore();
+    for (const e of JSON.parse(JSON.stringify(semente))) await addEmpresa(s, e);
+    const srv = criarServidor(s, T, { ...(adminSenha ? { adminSenha } : {}), ...resto });
+    await new Promise((r) => srv.listen(0, r));
+    base = `http://127.0.0.1:${srv.address().port}`;
+    fechar = () => srv.close();
+  }
   const f = (path, { token, method = 'GET', body, headers = {}, redirect } = {}) =>
     fetch(base + path, {
       method, redirect,
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
       body: body ? JSON.stringify(body) : undefined,
     });
-  return { f, fechar: () => srv.close() };
+  return { f, fechar };
 }
 
 const res = { data: '2026-11-20', horario: '20:00', pessoas: 2, ambiente: 'salao' };
@@ -375,16 +430,11 @@ test('excluir empresa: bloqueio após erros de senha e desativado sem senha conf
   fechar();
 
   // servidor sem senha de administrador: exclusão desativada
-  const s = criarStore();
-  await addEmpresa(s, { id: 'empresa_1', nome: 'empresa_1', ambientes: [], agente: {} });
-  const srv = criarServidor(s, T);
-  await new Promise((r) => srv.listen(0, r));
-  const r = await fetch(`http://127.0.0.1:${srv.address().port}/empresas/empresa_1/excluir`, {
-    method: 'POST', headers: { Authorization: `Bearer ${T.cliente}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ senha: '', confirmarNome: 'empresa_1' }),
-  });
+  const sem = await subir({ adminSenha: null, semente: [{ id: 'empresa_1', nome: 'empresa_1', ambientes: [], agente: {} }] });
+  const r = await sem.f('/empresas/empresa_1/excluir', { token: T.cliente, method: 'POST', body: { senha: '', confirmarNome: 'empresa_1' } });
   assert.strictEqual(r.status, 503);
-  assert.strictEqual((await s.empresaListar()).length, 1);
-  srv.close();
+  assert.strictEqual((await sem.f('/empresas', { token: T.cliente }).then((x) => x.json())).length, 1);
+  sem.fechar();
 });
 
 test('recursos por empresa: reservas e conhecimento ligam e desligam', async () => {
@@ -748,7 +798,7 @@ test('limite: a 21ª tentativa com chave errada em 1 minuto devolve 429 com Retr
   fechar();
 });
 
-test('limite: a janela de 1 minuto reinicia a contagem de chaves inválidas', async () => {
+test('limite: a janela de 1 minuto reinicia a contagem de chaves inválidas', INTERNO, async () => {
   let t = 1000000;
   const { f, fechar } = await subir({ agora: () => t });
   for (let i = 0; i < 20; i++) await f('/empresas', { token: 'errada' });
@@ -781,19 +831,14 @@ test('limite: X-Forwarded-For só vale com confiarProxy', async () => {
   b.fechar();
 });
 
-// Sobe src/server.js de verdade (processo filho) e devolve a lista de GET /empresas
+// Sobe o servidor de verdade (processo filho) e devolve a lista de GET /empresas
 async function empresasDoServidor(extraEnv) {
-  const { spawn } = require('node:child_process');
-  const net = require('node:net');
-  const porta = await new Promise((r) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => r(p)); }); });
-  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PORT: String(porta), KENDJI_TOKEN_INTEGRACAO: 'ti-teste', ...extraEnv };
-  const filho = spawn(process.execPath, [require('node:path').join(__dirname, '..', 'src', 'server.js')], { env, stdio: ['ignore', 'pipe', 'inherit'] });
+  const srv = await lancar({ KENDJI_TOKEN_INTEGRACAO: 'ti-teste', ...extraEnv });
   try {
-    await new Promise((ok, err) => { filho.stdout.once('data', ok); filho.once('error', err); filho.once('exit', () => err(new Error('servidor saiu'))); });
-    const r = await fetch(`http://127.0.0.1:${porta}/empresas`, { headers: { Authorization: 'Bearer ti-teste' } });
+    const r = await fetch(`${srv.base}/empresas`, { headers: { Authorization: 'Bearer ti-teste' } });
     assert.strictEqual(r.status, 200);
     return await r.json();
-  } finally { filho.kill(); }
+  } finally { srv.fechar(); }
 }
 
 test('server.js sem KENDJI_DEMO começa vazio: GET /empresas devolve []', async () => {
@@ -911,7 +956,7 @@ function ctxCom(plat) {
   return nucleoMod.criarContexto({ store, tokens: { integracao: 'ti-bat' } });
 }
 
-test('núcleo: tratar() direto, sem rede, passa a bateria de contrato', async () => {
+test('núcleo: tratar() direto, sem rede, passa a bateria de contrato', INTERNO, async () => {
   const t = await bateria(chamarTratar(ctxCom(plataformaNode())));
   const status = Object.fromEntries(t.map(([n, s]) => [n, s]));
   assert.strictEqual(status['saude'], 200);
@@ -924,13 +969,13 @@ test('núcleo: tratar() direto, sem rede, passa a bateria de contrato', async ()
   assert.strictEqual(status['data impossível'], 400);
 });
 
-test('núcleo: plataforma alternativa (crypto.subtle) dá exatamente o mesmo resultado que a do Node', async () => {
+test('núcleo: plataforma alternativa (crypto.subtle) dá exatamente o mesmo resultado que a do Node', INTERNO, async () => {
   const noNode = await bateria(chamarTratar(ctxCom(plataformaNode())));
   const web = await bateria(chamarTratar(ctxCom(plataformaWeb())));
   assert.deepStrictEqual(web, noNode);
 });
 
-test('núcleo: a mesma bateria pelo servidor Node (adaptador) devolve a mesma transcrição', async () => {
+test('núcleo: a mesma bateria pelo servidor Node (adaptador) devolve a mesma transcrição', INTERNO, async () => {
   const noNucleo = await bateria(chamarTratar(ctxCom(plataformaNode())));
   const s = criarStore();
   const srv = criarServidor(s, { integracao: 'ti-bat' });
@@ -951,7 +996,7 @@ test('núcleo: a mesma bateria pelo servidor Node (adaptador) devolve a mesma tr
   assert.deepStrictEqual(viaHttp, noNucleo);
 });
 
-test('plataformas: sha256, base64 (4 MB), tempo constante e aleatório são equivalentes', async () => {
+test('plataformas: sha256, base64 (4 MB), tempo constante e aleatório são equivalentes', INTERNO, async () => {
   const pn = plataformaNode(), pw = plataformaWeb();
   assert.strictEqual(await pn.sha256Hex('chave-secreta'), await pw.sha256Hex('chave-secreta'));
   assert.strictEqual(await pw.sha256Hex(''), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
@@ -974,7 +1019,7 @@ test('plataformas: sha256, base64 (4 MB), tempo constante e aleatório são equi
   }
 });
 
-test('núcleo sem Node: nenhum arquivo de src/ (fora de src/node/) usa require(, node:, Buffer ou process.', () => {
+test('núcleo sem Node: nenhum arquivo de src/ (fora de src/node/) usa require(, node:, Buffer ou process.', INTERNO, () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const dir = path.join(__dirname, '..', 'src');
@@ -990,7 +1035,7 @@ test('núcleo sem Node: nenhum arquivo de src/ (fora de src/node/) usa require(,
   assert.match(fs.readFileSync(path.join(dir, 'node', 'servidor.js'), 'utf8'), /node:http/);
 });
 
-test('repositório: reservaCriar rechecando a sobreposição devolve conflito e não grava nada', async () => {
+test('repositório: reservaCriar rechecando a sobreposição devolve conflito e não grava nada', INTERNO, async () => {
   const s = criarStore();
   await addEmpresa(s, { id: 'empresa_1', nome: 'E', ambientes: [{ nome: 'salao', mesas: [{ id: 'S1', capacidade: 4, reservavel: true }] }], agente: {} });
   const entrada = (inicio, chave) => ({ empresaId: 'empresa_1', chave, candidatas: [{ mesaId: 'S1', ambiente: 'salao' }], reserva: { data: '2026-11-20', horario: '20:00', pessoas: 2, inicio, fim: inicio + 90 } });
@@ -1005,7 +1050,7 @@ test('repositório: reservaCriar rechecando a sobreposição devolve conflito e 
 
 // ---- TASK-006: o corpo só é lido depois de autenticar, com o limite da rota ----
 
-test('corpo: sem token, com chave errada ou em rota inexistente o núcleo não lê o corpo', async () => {
+test('corpo: sem token, com chave errada ou em rota inexistente o núcleo não lê o corpo', INTERNO, async () => {
   const ctx = ctxCom(plataformaNode());
   const chamadas = [];
   const req = (metodo, url, token) => ({
@@ -1024,7 +1069,7 @@ test('corpo: sem token, com chave errada ou em rota inexistente o núcleo não l
   assert.deepStrictEqual(chamadas, [['POST', '/empresas', 512 * 1024]]);
 });
 
-test('corpo: documento de conhecimento usa o limite de 6 MiB; as demais rotas, 512 KiB', async () => {
+test('corpo: documento de conhecimento usa o limite de 6 MiB; as demais rotas, 512 KiB', INTERNO, async () => {
   const ctx = ctxCom(plataformaNode());
   const limites = [];
   const chamar = (metodo, url, corpo) => nucleoMod.tratar({
