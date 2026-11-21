@@ -141,7 +141,7 @@ pub struct Reserva {
     /// UUID v4 interno (chave primária). Nunca sai pela API.
     pub uuid: String,
     pub empresa_id: String,
-    pub mesa_id: String,
+    pub mesa_id: Option<String>,
     pub ambiente: String,
     pub data: String,
     pub horario: String,

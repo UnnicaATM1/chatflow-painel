@@ -24,7 +24,7 @@ pub async fn mapa<R: Repositorio>(
                 .mesas
                 .iter()
                 .map(|m| {
-                    let r = confirmadas.iter().find(|x| x.mesa_id == m.id && i < x.fim && i + DURACAO_MIN > x.inicio);
+                    let r = confirmadas.iter().find(|x| x.mesa_id.as_deref() == Some(m.id.as_str()) && i < x.fim && i + DURACAO_MIN > x.inicio);
                     let reserva = r.map_or(Json::Null, |r| {
                         let mut o = Map::new();
                         o.insert("horario".into(), r.horario.clone().into());

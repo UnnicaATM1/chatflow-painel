@@ -5,6 +5,8 @@
   "description": "API e painel do ChatFlow Painel (agentes e reservas por loja)",
   "scripts": {
     "start": "node src/server.js",
+    "backup": "node scripts/backup-sqlite.js",
+    "restaurar": "node scripts/restaurar-sqlite.js",
     "test": "node --test --test-force-exit \"tests/*.test.js\""
   },
   "engines": {

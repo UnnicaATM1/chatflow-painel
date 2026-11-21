@@ -5,23 +5,36 @@ use crate::util::{Res, erro};
 /// Fuso de negócio padrão (`CHATFLOW_FUSO` vazio ou inválido).
 pub const FUSO_PADRAO: &str = "America/Sao_Paulo";
 
-/// `CHATFLOW_FUSO`: nome de fuso IANA (`America/Sao_Paulo`, `UTC`, `Etc/GMT+3`). Valor vazio ou com caracteres que nenhum
-/// nome IANA tem volta ao padrão. Não há banco de fusos no núcleo (seria um `chrono-tz` só para guardar uma string), então
-/// um nome bem formado mas inexistente passa; o JavaScript (que valida com `Intl`) o trocaria pelo padrão.
-/// Hoje nenhuma regra compara reservas com "agora", então o fuso só é carregado e exposto em `Config::fuso`.
+/// `CHATFLOW_FUSO`: nome de fuso IANA (`America/Sao_Paulo`, `UTC`, `Etc/GMT+3`).
 pub fn fuso_de(valor: Option<&str>) -> String {
-    let v = valor.map_or("", str::trim);
-    let valido = !v.is_empty()
-        && v.len() <= 64
-        && v.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '/'))
-        && !v.starts_with('/')
-        && !v.contains("//");
-    if valido {
-        v.to_string()
+    let fuso = valor.map_or("", str::trim);
+    if zona(fuso).is_some() {
+        fuso.into()
     } else {
-        FUSO_PADRAO.to_string()
+        FUSO_PADRAO.into()
     }
+}
+
+fn zona(fuso: &str) -> Option<chrono_tz::Tz> {
+    fuso.parse().ok().or_else(|| {
+        chrono_tz::TZ_VARIANTS
+            .iter()
+            .copied()
+            .find(|tz| tz.name().eq_ignore_ascii_case(fuso))
+    })
+}
+
+/// Minutos no relógio de parede do negócio (mesma unidade de `Reserva::fim`).
+pub fn agora_minutos(ms: i64, fuso: &str) -> Res<i64> {
+    let instante = chrono::DateTime::from_timestamp_millis(ms)
+        .ok_or_else(|| crate::util::err(400, "data ou horário inválido"))?;
+    let zona = zona(fuso).unwrap_or(chrono_tz::America::Sao_Paulo);
+    Ok(instante
+        .with_timezone(&zona)
+        .naive_local()
+        .and_utc()
+        .timestamp()
+        .div_euclid(60))
 }
 
 fn bissexto(a: i64) -> bool {

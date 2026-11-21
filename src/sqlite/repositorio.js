@@ -5,9 +5,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { gerarCodigoReserva, plataformaWeb } from '../plataforma.js';
 import { IDEMPOTENCIA_MAX_PADRAO, IDEMPOTENCIA_TTL_PADRAO_MS } from '../repositorio.js';
 import { prepararReservaSemeada } from '../reservas.js';
+import { fusoDe, minutosAbsolutos, parede } from '../tempo.js';
 import { limparIdempotencia } from './idempotencia-limpeza.js';
+import { aplicarMigracoesSqlite } from './migracoes.js';
 
-const MIGRACAO = new URL('../../db/migrations/0001_inicial.sql', import.meta.url);
 const MODULOS_PADRAO = { reservas: true, conhecimento: true };
 const CONFLITO = { ok: false, motivo: 'conflito' };
 const COLUNAS_RESERVA = 'codigo AS id, empresa_id AS empresaId, mesa_id AS mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente AS nomeCliente, contato';
@@ -40,13 +41,14 @@ function congelar(objeto) {
   return objeto;
 }
 
-export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idempotenciaTtlMs, idempotenciaMax } = {}) {
+export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idempotenciaTtlMs, idempotenciaMax, reservarArquivo, fuso } = {}) {
   const p = plat || plataformaWeb();
   const ttlMs = idempotenciaTtlMs > 0 ? Math.ceil(idempotenciaTtlMs) : IDEMPOTENCIA_TTL_PADRAO_MS;
   const max = idempotenciaMax > 0 ? Math.floor(idempotenciaMax) : IDEMPOTENCIA_MAX_PADRAO;
   const boot = p.uuid();
   const db = new DatabaseSync(caminho);
   let chaveFila;
+  let liberarArquivo;
   try {
     chaveFila = caminho === ':memory:' ? db : realpathSync.native(caminho);
     db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON');
@@ -54,21 +56,25 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
       const diagnosticos = db.prepare('PRAGMA integrity_check').all().map((linha) => linha.integrity_check);
       if (diagnosticos.length !== 1 || diagnosticos[0] !== 'ok') throw new Error(diagnosticos.join('; ') || 'resultado vazio');
     } catch (erro) {
-      throw new Error(`Integridade do SQLite falhou em "${caminho}": ${erro.message}`, { cause: erro });
+      throw new Error(`Integridade do SQLite falhou em "${caminho}": ${erro.message}. Consulte docs/operacao-sqlite.md, seção 5.`, { cause: erro });
+    }
+    if (caminho !== ':memory:' && reservarArquivo) {
+      // Serializa a leitura, a recuperação de PID obsoleto e a criação do marcador
+      // entre inicializações simultâneas do mesmo banco.
+      db.exec('BEGIN IMMEDIATE');
+      liberarArquivo = reservarArquivo(chaveFila);
+      db.exec('COMMIT');
     }
     if (caminho !== ':memory:' && db.prepare('PRAGMA journal_mode = WAL').get().journal_mode !== 'wal') {
       throw new Error(`Não foi possível ativar WAL no SQLite em "${caminho}"`);
     }
-    // FULL sincroniza cada commit do WAL, inclusive em caso de perda de energia.
-    db.exec('PRAGMA synchronous = FULL');
-    if (db.prepare('PRAGMA user_version').get().user_version === 0) {
-      const sql = readFileSync(MIGRACAO, 'utf8');
-      db.exec('BEGIN IMMEDIATE');
-      db.exec(sql);
-      db.exec('PRAGMA user_version = 1; COMMIT');
-    }
+    // Decisão do T00: preservar as reservas confirmadas vale mais que vazão.
+    // FULL sincroniza cada commit do WAL para resistir a quedas de energia.
+    db.exec('PRAGMA synchronous = FULL; PRAGMA wal_autocheckpoint = 1000; PRAGMA journal_size_limit = 67108864');
+    aplicarMigracoesSqlite(db);
   } catch (erro) {
     db.close();
+    liberarArquivo?.();
     throw erro;
   }
 
@@ -185,6 +191,22 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
     `SELECT 1 FROM reservas WHERE empresa_id = ? AND mesa_id = ? AND status = 'confirmada'
       AND codigo IS NOT ? AND fim > ? AND inicio < ? LIMIT 1`, empresaId, mesaId, ignorarId, inicio, fim,
   ));
+
+  // Revalida o layout na mutação: a mesa ainda existe no ambiente indicado?
+  const mesaExiste = (empresaId, mesaId, ambiente) => Boolean(obter(
+    `SELECT 1 FROM mesas m JOIN ambientes a ON a.id = m.ambiente_id AND a.empresa_id = m.empresa_id
+      WHERE m.empresa_id = ? AND m.mesa_id = ? AND (? IS NULL OR a.nome = ?) LIMIT 1`, empresaId, mesaId, ambiente ?? null, ambiente ?? null));
+
+  // Códigos das reservas ATIVAS (confirmadas que ainda não terminaram no relógio de parede da empresa) nas mesas dadas.
+  function reservasAtivasDasMesas(empresaId, mesaIds) {
+    const w = parede(p.agora(), fusoDe(fuso));
+    const agora = minutosAbsolutos(w.data, w.horario);
+    const codigos = [];
+    for (const mesaId of mesaIds) {
+      for (const r of listar("SELECT codigo FROM reservas WHERE empresa_id = ? AND mesa_id = ? AND status = 'confirmada' AND fim > ?", empresaId, mesaId, agora)) codigos.push(r.codigo);
+    }
+    return codigos.sort();
+  }
 
   function inserirReserva(empresaId, reserva) {
     const { mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nomeCliente, contato } = reserva;
@@ -310,6 +332,55 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
         return mesa;
       });
     },
+    // Contrato A (mesmas assinaturas do repositório em memória). ambienteId = nome do ambiente.
+    async ambienteRenomear(empresaId, ambienteId, nome) {
+      return transacionar(() => {
+        const amb = obter('SELECT id FROM ambientes WHERE empresa_id = ? AND nome = ?', empresaId, ambienteId);
+        if (!amb) return { erro: 'nao_encontrado' };
+        if (obter('SELECT 1 FROM ambientes WHERE empresa_id = ? AND nome_normalizado = ? AND id <> ?', empresaId, nome.toLowerCase(), amb.id)) {
+          return { erro: 'nome_duplicado' };
+        }
+        gravar('UPDATE ambientes SET nome = ?, nome_normalizado = ? WHERE id = ?', nome, nome.toLowerCase(), amb.id);
+        gravar('UPDATE reservas SET ambiente = ? WHERE empresa_id = ? AND ambiente = ?', nome, empresaId, ambienteId);
+        return {
+          nome,
+          mesas: listar('SELECT * FROM mesas WHERE empresa_id = ? AND ambiente_id = ? ORDER BY ordem', empresaId, amb.id).map(lerMesa),
+        };
+      });
+    },
+    async ambienteRemover(empresaId, ambienteId) {
+      return transacionar(() => {
+        const amb = obter('SELECT id FROM ambientes WHERE empresa_id = ? AND nome = ?', empresaId, ambienteId);
+        if (!amb) return { erro: 'nao_encontrado' };
+        const ids = listar('SELECT mesa_id FROM mesas WHERE empresa_id = ? AND ambiente_id = ? ORDER BY ordem', empresaId, amb.id).map((m) => m.mesa_id);
+        const bloqueio = reservasAtivasDasMesas(empresaId, ids);
+        if (bloqueio.length) return { erro: 'mesa_com_reserva', reservas: bloqueio };
+        for (const id of ids) gravar('UPDATE reservas SET mesa_id = NULL WHERE empresa_id = ? AND mesa_id = ?', empresaId, id);
+        gravar('DELETE FROM mesas WHERE empresa_id = ? AND ambiente_id = ?', empresaId, amb.id);
+        gravar('DELETE FROM ambientes WHERE id = ?', amb.id);
+        return { ok: true, mesasRemovidas: ids };
+      });
+    },
+    async mesaRemover(empresaId, mesaId) {
+      return transacionar(() => {
+        if (!obter('SELECT 1 FROM mesas WHERE empresa_id = ? AND mesa_id = ?', empresaId, mesaId)) return { erro: 'nao_encontrado' };
+        const bloqueio = reservasAtivasDasMesas(empresaId, [mesaId]);
+        if (bloqueio.length) return { erro: 'mesa_com_reserva', reservas: bloqueio };
+        const desligadas = listar('SELECT codigo FROM reservas WHERE empresa_id = ? AND mesa_id = ? ORDER BY codigo', empresaId, mesaId).map((r) => r.codigo);
+        gravar('UPDATE reservas SET mesa_id = NULL WHERE empresa_id = ? AND mesa_id = ?', empresaId, mesaId);
+        gravar('DELETE FROM mesas WHERE empresa_id = ? AND mesa_id = ?', empresaId, mesaId);
+        return { ok: true, reservasDesligadas: desligadas };
+      });
+    },
+    async reservaExcluir(empresaId, reservaId) {
+      return transacionar(() => {
+        const r = obterReserva(empresaId, reservaId);
+        if (!r) return { erro: 'nao_encontrada' };
+        if (r.status === 'confirmada') return { erro: 'reserva_ativa' };
+        gravar('DELETE FROM reservas WHERE empresa_id = ? AND codigo = ?', empresaId, reservaId);
+        return { ok: true, reserva: r };
+      });
+    },
     async mesaEditar(empresaId, mesaId, { capacidade, reservavel }) {
       return transacionar(() => {
         const linha = obter('SELECT * FROM mesas WHERE empresa_id = ? AND mesa_id = ?', empresaId, mesaId);
@@ -335,7 +406,7 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
         const antiga = chave ? idemObter(empresaId, chave) : null;
         if (antiga) return { criada: false, resposta: antiga };
         const { inicio, fim } = reserva;
-        const candidata = candidatas.find((c) => !ocupada(empresaId, c.mesaId, inicio, fim));
+        const candidata = candidatas.find((c) => mesaExiste(empresaId, c.mesaId, c.ambiente) && !ocupada(empresaId, c.mesaId, inicio, fim));
         if (!candidata) return { conflito: true };
         const { mesaId, ambiente } = candidata;
         const id = inserirReserva(empresaId, { ...reserva, mesaId, ambiente, status: 'confirmada' });
@@ -353,7 +424,7 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
         const atual = obterReserva(empresaId, id);
         if (atual?.status !== 'confirmada') return { ...CONFLITO };
         const nova = { ...atual, ...dados, ...cliente };
-        if (ocupada(empresaId, nova.mesaId, nova.inicio, nova.fim, id)) return { ...CONFLITO };
+        if (!mesaExiste(empresaId, nova.mesaId, nova.ambiente) || ocupada(empresaId, nova.mesaId, nova.inicio, nova.fim, id)) return { ...CONFLITO };
         gravar(`UPDATE reservas SET mesa_id = ?, ambiente = ?, data = ?, horario = ?, pessoas = ?,
           inicio = ?, fim = ?, nome_cliente = ?, contato = ? WHERE empresa_id = ? AND codigo = ?`,
         nova.mesaId, nova.ambiente, nova.data, nova.horario, nova.pessoas, nova.inicio, nova.fim,
@@ -369,8 +440,9 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
     async reservaReativar(empresaId, id) {
       return transacionar(() => {
         const atual = obterReserva(empresaId, id);
+        if (!atual) return { ...CONFLITO };
         if (atual.status === 'confirmada') return { ok: true, reserva: atual };
-        if (ocupada(empresaId, atual.mesaId, atual.inicio, atual.fim, id)) return { ...CONFLITO };
+        if (atual.mesaId == null || !mesaExiste(empresaId, atual.mesaId, atual.ambiente) || ocupada(empresaId, atual.mesaId, atual.inicio, atual.fim, id)) return { ...CONFLITO };
         gravar("UPDATE reservas SET status = 'confirmada' WHERE empresa_id = ? AND codigo = ?", empresaId, id);
         return { ok: true, reserva: { ...atual, status: 'confirmada' } };
       });
@@ -455,6 +527,30 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
     if (nome !== 'plat') repositorio[nome] = (...args) => enfileirar(chaveFila, () => operacao(...args));
   }
   repositorio.transacao = (executar) => enfileirar(chaveFila, () => transacionar(() => executar(interno)));
-  repositorio.fechar = () => enfileirar(chaveFila, () => db.close());
+  let fechado = false;
+  function fecharBanco() {
+    if (fechado) return;
+    try {
+      // Na saída síncrona, pode haver uma transação interrompida. O checkpoint
+      // incorpora somente gravações confirmadas e não deve esperar outro leitor.
+      if (db.isTransaction) db.exec('ROLLBACK');
+      if (liberarArquivo) {
+        db.exec('PRAGMA busy_timeout = 0');
+        if (db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get().busy) {
+          throw new Error('Checkpoint do SQLite ocupado; o WAL será recuperado na próxima abertura');
+        }
+      }
+    } finally {
+      db.close();
+      fechado = true;
+      liberarArquivo?.();
+    }
+  }
+  let fechamento;
+  repositorio.fechar = () => {
+    fechamento ??= enfileirar(chaveFila, fecharBanco);
+    return fechamento;
+  };
+  repositorio.fecharNaSaida = fecharBanco;
   return repositorio;
 }

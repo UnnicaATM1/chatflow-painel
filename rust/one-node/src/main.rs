@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 /// Acima disto, o corpo que ninguém pediu (ou que passou do limite) deixa de ser descartado e a conexão é derrubada.
 const DESCARTE_MAX: usize = 32 * 1024 * 1024;
 
-const ESTATICOS: [(&str, &str); 7] = [
+const ESTATICOS: [(&str, &str); 9] = [
     ("index.html", "text/html; charset=utf-8"),
     ("app.js", "text/javascript; charset=utf-8"),
     ("config.js", "text/javascript; charset=utf-8"),
@@ -30,6 +30,8 @@ const ESTATICOS: [(&str, &str); 7] = [
     ("bundle.css", "text/css; charset=utf-8"),
     ("tokens.css", "text/css; charset=utf-8"),
     ("logo-chatflow.png", "image/png"),
+    ("vendor/react.production.min.js", "text/javascript; charset=utf-8"),
+    ("vendor/react-dom.production.min.js", "text/javascript; charset=utf-8"),
 ];
 
 /// Relógio e aleatoriedade do sistema.

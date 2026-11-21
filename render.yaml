@@ -1,9 +1,10 @@
-# Exemplo para aplicar somente após o fechamento de TASK-010 e TASK-012.
+# Exemplo para aplicar após a homologação da operação do SQLite.
 services:
   - type: web
     name: chatflow-painel
     runtime: docker
     plan: starter
+    # Usa o ENTRYPOINT da imagem para encaminhar SIGTERM ao Node.
     dockerfilePath: ./Dockerfile
     numInstances: 1
     autoDeployTrigger: "off"
@@ -17,6 +18,8 @@ services:
         value: sqlite
       - key: CHATFLOW_BANCO_ARQUIVO
         value: /var/data/chatflow.sqlite
+      - key: CHATFLOW_DESLIGAR_MS
+        value: "10000"
       - key: CHATFLOW_CONFIAR_PROXY
         value: "1"
       - key: CHATFLOW_TOKEN_CLIENTE

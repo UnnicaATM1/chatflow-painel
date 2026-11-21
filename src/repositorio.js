@@ -8,6 +8,7 @@
 
 import { gerarCodigoReserva, plataformaWeb } from './plataforma.js';
 import { prepararReservaSemeada } from './reservas.js';
+import { fusoDe, minutosAbsolutos, parede } from './tempo.js';
 
 function congelar(o) {
   if (o && typeof o === 'object') { Object.values(o).forEach(congelar); Object.freeze(o); }
@@ -23,7 +24,7 @@ export const IDEMPOTENCIA_MAX_PADRAO = 10000; // entradas por empresa (as mais a
 // opcoes.plat: plataforma (padrão: Web API). opcoes.sink: função chamada com cada evento de histórico gravado
 // (o adaptador Node usa para gravar em arquivo); o núcleo só chama sink(evento).
 // opcoes.idempotenciaTtlMs / opcoes.idempotenciaMax: validade e teto por empresa das respostas de idempotência.
-export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempotenciaMax } = {}) {
+export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempotenciaMax, fuso } = {}) {
   const p = plat || plataformaWeb();
   const empresas = new Map(); // id -> { id, nome, agente, ambientes, modulos, chave, conhecimento: [], proxConhecimento }
   const reservas = new Map(); // UUID interno -> reserva com o código público em id
@@ -49,6 +50,17 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
     for (const [k, e] of m) { if (agora - e.quando >= ttlIdem) m.delete(k); else break; }
     while (m.size > maxIdem) m.delete(m.keys().next().value);
   };
+  // Reserva ATIVA: confirmada que ainda não terminou no relógio de parede da empresa (fuso de negócio).
+  const agoraMin = () => { const w = parede(p.agora(), fusoDe(fuso)); return minutosAbsolutos(w.data, w.horario); };
+  const codigosAtivosDe = (empresaId, mesaIds) => {
+    const agora = agoraMin();
+    return [...reservas.values()]
+      .filter((r) => r.empresaId === empresaId && mesaIds.has(r.mesaId) && r.status === 'confirmada' && r.fim > agora)
+      .map((r) => r.id).sort();
+  };
+  // Revalida o layout no momento da mutação: a mesa (e o ambiente dela) ainda existem na empresa?
+  const mesaExiste = (empresaId, mesaId, ambiente) => Boolean(empresas.get(empresaId)?.ambientes
+    .some((a) => (ambiente === undefined || a.nome === ambiente) && a.mesas.some((m) => m.id === mesaId)));
   const historico = [];
   const boot = p.uuid();
   let tentativasAdmin = { n: 0, ate: 0 };
@@ -151,6 +163,40 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
       amb.mesas.push(mesa);
       return mesa;
     },
+    // Contrato A. ambienteId = nome do ambiente.
+    // Devolve o ambiente atualizado ({ nome, mesas }) ou { erro: 'nome_duplicado' | 'nao_encontrado' }. Atualiza o nome nas reservas.
+    async ambienteRenomear(empresaId, ambienteId, nome) {
+      const e = empresas.get(empresaId);
+      const amb = e.ambientes.find((a) => a.nome === ambienteId);
+      if (!amb) return { erro: 'nao_encontrado' };
+      if (e.ambientes.some((a) => a !== amb && a.nome.toLowerCase() === nome.toLowerCase())) return { erro: 'nome_duplicado' };
+      amb.nome = nome;
+      for (const r of reservas.values()) if (r.empresaId === empresaId && r.ambiente === ambienteId) r.ambiente = nome;
+      return amb;
+    },
+    // Tudo ou nada. { ok: true, mesasRemovidas } | { erro: 'nao_encontrado' } | { erro: 'mesa_com_reserva', reservas }
+    async ambienteRemover(empresaId, ambienteId) {
+      const e = empresas.get(empresaId);
+      const amb = e.ambientes.find((a) => a.nome === ambienteId);
+      if (!amb) return { erro: 'nao_encontrado' };
+      const ids = amb.mesas.map((m) => m.id);
+      const bloqueio = codigosAtivosDe(empresaId, new Set(ids));
+      if (bloqueio.length) return { erro: 'mesa_com_reserva', reservas: bloqueio };
+      for (const r of reservas.values()) if (r.empresaId === empresaId && ids.includes(r.mesaId)) r.mesaId = null;
+      e.ambientes.splice(e.ambientes.indexOf(amb), 1);
+      return { ok: true, mesasRemovidas: ids };
+    },
+    // { ok: true, reservasDesligadas } | { erro: 'nao_encontrado' } | { erro: 'mesa_com_reserva', reservas }
+    async mesaRemover(empresaId, mesaId) {
+      const amb = empresas.get(empresaId).ambientes.find((a) => a.mesas.some((m) => m.id === mesaId));
+      if (!amb) return { erro: 'nao_encontrado' };
+      const bloqueio = codigosAtivosDe(empresaId, new Set([mesaId]));
+      if (bloqueio.length) return { erro: 'mesa_com_reserva', reservas: bloqueio };
+      const desligadas = [];
+      for (const r of reservas.values()) if (r.empresaId === empresaId && r.mesaId === mesaId) { r.mesaId = null; desligadas.push(r.id); }
+      amb.mesas.splice(amb.mesas.findIndex((m) => m.id === mesaId), 1);
+      return { ok: true, reservasDesligadas: desligadas.sort() };
+    },
     // Devolve { antes, mesa } ou null se a mesa não existe.
     async mesaEditar(empresaId, mesaId, { capacidade, reservavel }) {
       const mesa = empresas.get(empresaId).ambientes.flatMap((a) => a.mesas).find((m) => m.id === mesaId);
@@ -178,7 +224,7 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
       const antiga = chave ? idemObter(empresaId, chave) : null;
       if (antiga) return { criada: false, resposta: antiga };
       for (const c of candidatas) {
-        if (ocupada(empresaId, c.mesaId, reserva.inicio, reserva.fim)) continue;
+        if (!mesaExiste(empresaId, c.mesaId, c.ambiente) || ocupada(empresaId, c.mesaId, reserva.inicio, reserva.fim)) continue;
         const r = inserirReserva(empresaId, { mesaId: c.mesaId, ambiente: c.ambiente, ...reserva, status: 'confirmada' });
         const resposta = { status: 'confirmada', reservaId: r.id, mesa: r.mesaId, ambiente: r.ambiente };
         if (chave) idemGravar(empresaId, chave, resposta);
@@ -195,7 +241,8 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
     // ('' apaga o campo). { ok: true, reserva } | { ok: false, motivo: 'conflito' }
     async reservaEditar({ empresaId, id, dados, cliente }) {
       const r = obterReserva(empresaId, id);
-      if (ocupada(empresaId, dados.mesaId, dados.inicio, dados.fim, id)) return { ok: false, motivo: 'conflito' };
+      if (!r || r.status !== 'confirmada' || !mesaExiste(empresaId, dados.mesaId, dados.ambiente)
+        || ocupada(empresaId, dados.mesaId, dados.inicio, dados.fim, id)) return { ok: false, motivo: 'conflito' };
       Object.assign(r, dados, cliente || {});
       for (const k of Object.keys(cliente || {})) if (cliente[k] === '') delete r[k];
       return { ok: true, reserva: r };
@@ -203,14 +250,27 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
     // ATÔMICA. Cancela (libera a mesa). Devolve a reserva.
     async reservaCancelar(empresaId, id) {
       const r = obterReserva(empresaId, id);
+      if (!r) return null; // excluída em paralelo
       r.status = 'cancelada';
       return r;
+    },
+    // Contrato A. Exclui em definitivo só reserva cancelada; o código continua emitido (nunca reaproveitado).
+    // { ok: true, reserva: instantâneo } | { erro: 'nao_encontrada' } | { erro: 'reserva_ativa' }
+    async reservaExcluir(empresaId, reservaId) {
+      const r = obterReserva(empresaId, reservaId);
+      if (!r) return { erro: 'nao_encontrada' };
+      if (r.status === 'confirmada') return { erro: 'reserva_ativa' };
+      const codigos = codigosPorEmpresa.get(empresaId);
+      reservas.delete(codigos.get(reservaId));
+      codigos.set(reservaId, null);
+      return { ok: true, reserva: { ...r } };
     },
     // ATÔMICA. Reativa rechecando a sobreposição. { ok: true, reserva } | { ok: false, motivo: 'conflito' }
     async reservaReativar(empresaId, id) {
       const r = obterReserva(empresaId, id);
+      if (!r) return { ok: false, motivo: 'conflito' };
       if (r.status === 'confirmada') return { ok: true, reserva: r };
-      if (ocupada(empresaId, r.mesaId, r.inicio, r.fim, id)) return { ok: false, motivo: 'conflito' };
+      if (r.mesaId == null || !mesaExiste(empresaId, r.mesaId, r.ambiente) || ocupada(empresaId, r.mesaId, r.inicio, r.fim, id)) return { ok: false, motivo: 'conflito' };
       r.status = 'confirmada';
       return { ok: true, reserva: r };
     },

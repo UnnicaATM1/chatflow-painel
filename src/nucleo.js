@@ -58,12 +58,65 @@ async function mudarReserva(store, lid, rid, operacao, ator, extra) {
   const antes = a0 ? publica(a0) : null;
   const r = await operacao();
   if (r.status === 'indisponivel') return r;
-  const d = diff(antes, publica(await achar()));
+  const d = diff(antes, r.reserva);
   if (Object.keys(d.depois).length) {
     const acao = (extra && extra.acao) || (d.depois.status === 'cancelada' ? 'cancelada' : d.depois.status === 'confirmada' ? 'reativada' : 'editada');
     await registrar(store, { empresaId: lid, entidade: 'reserva', entidadeId: rid, ...ator, ...extra, acao, antes: d.antes, depois: d.depois });
   }
   return r;
+}
+
+function mesaPublica({ id, capacidade, reservavel }) {
+  return { id, capacidade, reservavel: reservavel === true };
+}
+
+async function mudarLayout(store, empresaId, recurso, id, metodo, nome, ator) {
+  if (store.transacao) return store.transacao((tx) => mudarLayout(tx, empresaId, recurso, id, metodo, nome, ator));
+  const l = await empresa(store, empresaId);
+  const entidade = recurso === 'ambientes' ? 'ambiente' : 'mesa';
+  const ambiente = l.ambientes.find((a) => entidade === 'ambiente' ? a.nome === id : a.mesas.some((m) => m.id === id));
+  if (!ambiente) return [404, { erro: `${entidade} inexistente` }];
+  const evento = { empresaId, entidade, entidadeId: id };
+
+  if (metodo === 'PATCH') {
+    const antes = { nome: ambiente.nome };
+    const resultado = await store.ambienteRenomear(empresaId, id, nome);
+    if (resultado.erro === 'nome_duplicado') return [409, { erro: 'nome já usado' }];
+    if (resultado.erro === 'nao_encontrado') return [404, { erro: 'ambiente inexistente' }];
+    if (antes.nome !== resultado.nome) {
+      await registrar(store, { ...evento, acao: 'ambiente_renomeado', ...ator, antes, depois: { nome: resultado.nome } });
+    }
+    return [200, { nome: resultado.nome, mesas: resultado.mesas.map(mesaPublica) }];
+  }
+
+  const mesas = (entidade === 'ambiente' ? ambiente.mesas : ambiente.mesas.filter((m) => m.id === id)).map(mesaPublica);
+  const ids = new Set(mesas.map((m) => m.id));
+  const nomeAmbiente = ambiente.nome;
+  const reservas = (await store.reservaListar(empresaId))
+    .filter((r) => ids.has(r.mesaId)).map(({ id, mesaId }) => ({ id, mesaId }));
+  const antes = entidade === 'ambiente'
+    ? { nome: nomeAmbiente, mesas, reservas }
+    : { ...mesas[0], ambiente: nomeAmbiente, reservas };
+  const resultado = entidade === 'ambiente' ? await store.ambienteRemover(empresaId, id) : await store.mesaRemover(empresaId, id);
+  if (resultado.erro === 'nao_encontrado') return [404, { erro: `${entidade} inexistente` }];
+  if (resultado.erro === 'mesa_com_reserva') {
+    return [409, { erro: 'mesa com reserva ativa', reservas: resultado.reservas }];
+  }
+  const acao = entidade === 'ambiente' ? 'ambiente_removido' : 'mesa_removida';
+  await registrar(store, { ...evento, acao, ...ator, antes, depois: null });
+  return [200, resultado];
+}
+
+async function excluirReserva(store, empresaId, id, ator) {
+  if (store.transacao) return store.transacao((tx) => excluirReserva(tx, empresaId, id, ator));
+  await empresa(store, empresaId);
+  const resultado = await store.reservaExcluir(empresaId, id);
+  if (resultado.erro === 'nao_encontrada') return [404, { erro: 'reserva inexistente' }];
+  if (resultado.erro === 'reserva_ativa') return [409, { erro: 'reserva ativa; cancele antes de excluir' }];
+  const r = resultado.reserva;
+  const antes = { ...publica(r), inicio: r.inicio, fim: r.fim };
+  await registrar(store, { empresaId, entidade: 'reserva', entidadeId: id, acao: 'reserva_excluida', ...ator, antes, depois: null });
+  return [200, { ok: true }];
 }
 
 async function desfazer(store, lid, seq, ator) {
@@ -163,7 +216,7 @@ export function criarContexto(opcoes = {}) {
     adminSenha: opcoes.adminSenha || null, // CHATFLOW_ADMIN_SENHA: sem ela, excluir empresa fica desativado
     corsOrigens: new Set((opcoes.corsOrigens || []).map((o) => String(o).trim()).filter(Boolean)), // lista exata (CHATFLOW_CORS_ORIGENS)
     confiarProxy: opcoes.confiarProxy === true, // CHATFLOW_CONFIAR_PROXY=1: usar X-Forwarded-For
-    fuso: fusoDe(opcoes.fuso), // CHATFLOW_FUSO (padrão America/Sao_Paulo); nenhuma regra compara reservas com "agora" ainda
+    fuso: fusoDe(opcoes.fuso), // CHATFLOW_FUSO (padrão America/Sao_Paulo)
     agora: opcoes.agora || (() => plat.agora()),
     limiteInvalidas: criarLimitador(opcoes.limiteInvalidasPorMinuto || 20), // por IP, chave inválida ou ausente
     limiteValidas: criarLimitador(opcoes.limitePorChavePorMinuto || 300), // por chave válida
@@ -278,6 +331,23 @@ export async function tratar(req, ctx) {
       if (Object.keys(dl.depois).length) await registrar(store, { empresaId: l.id, entidade: 'empresa', entidadeId: l.id, acao: 'editada', ...quem(req, papel), ...dl });
       return resp(200, { id: l.id, nome, modulos: { ...l.modulos } });
     }
+    // PATCH/DELETE ambientes e DELETE mesas; o nome é o identificador do ambiente.
+    if (partes[0] === 'empresas' && partes.length === 4 && (
+      (partes[2] === 'ambientes' && ['PATCH', 'DELETE'].includes(req.metodo)) ||
+      (partes[2] === 'mesas' && req.metodo === 'DELETE')
+    )) {
+      if (!staff) return resp(403, { erro: 'sem permissão' });
+      const lid = decodeURIComponent(partes[1]);
+      const id = decodeURIComponent(partes[3]);
+      if (!(await moduloLigado(store, lid, 'reservas'))) return resp(404, { erro: 'recurso "reservas" não habilitado para esta empresa' });
+      let nome;
+      if (req.metodo === 'PATCH') {
+        const b = await lerCorpo(req);
+        nome = typeof b?.nome === 'string' ? b.nome.trim() : '';
+        if (!nome || [...nome].length > 60) return resp(400, { erro: 'nome do ambiente deve ter de 1 a 60 caracteres' });
+      }
+      return resp(...await mudarLayout(store, lid, partes[2], id, req.metodo, nome, quem(req, papel)));
+    }
     // PATCH /empresas/:id/mesas/:mesaId  { capacidade?, reservavel? }
     if (partes[0] === 'empresas' && partes[2] === 'mesas' && partes.length === 4 && req.metodo === 'PATCH') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
@@ -295,6 +365,7 @@ export async function tratar(req, ctx) {
         if (typeof b.reservavel !== 'boolean') return resp(400, { erro: 'reservavel inválido' });
       }
       const editada = await store.mesaEditar(l.id, mesaId, { capacidade: b.capacidade, reservavel: b.reservavel });
+      if (!editada) return resp(404, { erro: 'mesa inexistente' });
       const dm = diff(antesMesa, { capacidade: editada.mesa.capacidade, reservavel: editada.mesa.reservavel });
       if (Object.keys(dm.depois).length) await registrar(store, { empresaId: l.id, entidade: 'mesa', entidadeId: mesaId, acao: 'editada', ...quem(req, papel), ...dm });
       return resp(200, editada.mesa);
@@ -306,6 +377,9 @@ export async function tratar(req, ctx) {
       if (!(await moduloLigado(store, lid, 'reservas'))) return resp(404, { erro: 'recurso "reservas" não habilitado para esta empresa' });
       if (!codigoReservaValido(rid)) return resp(404, { erro: 'reserva inexistente' });
       const ator = quem(req, papel);
+      if (req.metodo === 'DELETE' && url.searchParams.get('definitivo') === '1') {
+        return resp(...await excluirReserva(store, lid, rid, ator));
+      }
       if (req.metodo === 'DELETE') return resp(200, await mudarReserva(store, lid, rid, () => cancelarReserva(store, lid, rid), ator));
       const b = await lerCorpo(req);
       const r = await mudarReserva(store, lid, rid, () => (b.status === 'cancelada' ? cancelarReserva(store, lid, rid)

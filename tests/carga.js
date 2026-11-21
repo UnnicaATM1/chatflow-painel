@@ -3,6 +3,7 @@
 //
 //   node tests/carga.js                                   Rust release (rust/target/release/one-node)
 //   CARGA_COMANDO='["node","src/server.js"]' node tests/carga.js        o servidor em JavaScript, para comparar
+//   CHATFLOW_BANCO=sqlite CARGA_COMANDO='["node","src/server.js"]' node tests/carga.js
 //   CARGA_SEGUNDOS=60 CARGA_CONEX=64 CARGA_PARADAS=3000 node tests/carga.js
 //
 // O cliente é o próprio Node: a vazão medida tem o teto dele. Use os números para comparar servidores e achar vazamento
@@ -13,6 +14,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const http = require('node:http');
+const { once } = require('node:events');
 
 const RAIZ = path.join(__dirname, '..');
 const COMANDO = process.env.CARGA_COMANDO ? JSON.parse(process.env.CARGA_COMANDO) : [path.join(RAIZ, 'rust', 'target', 'release', process.platform === 'win32' ? 'one-node.exe' : 'one-node')];
@@ -39,17 +41,35 @@ const pct = (v, p) => v.length ? v[Math.min(v.length - 1, Math.floor(v.length * 
 
 (async () => {
   const porta = await livre();
-  const semente = path.join(os.tmpdir(), `one-carga-${process.pid}.json`);
+  const temporarios = fs.mkdtempSync(path.join(os.tmpdir(), 'chatflow-carga-'));
+  const semente = path.join(temporarios, 'semente.json');
   fs.writeFileSync(semente, '[]');
+  const banco = process.env.CHATFLOW_BANCO;
+  const arquivoBanco = process.env.CHATFLOW_BANCO_ARQUIVO || (banco === 'sqlite' ? path.join(temporarios, 'carga.sqlite') : undefined);
   const env = {
     PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, PORT: String(porta), CHATFLOW_DEMO: '1',
     CHATFLOW_TOKEN_INTEGRACAO: TOKEN, CHATFLOW_LIMITE_CHAVE: '100000000', CHATFLOW_LIMITE_INVALIDAS: '100000000', CHATFLOW_SEMENTE_ARQUIVO: semente,
+    CHATFLOW_BANCO: banco, CHATFLOW_BANCO_ARQUIVO: arquivoBanco,
     ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('CHATFLOW_IDEMPOTENCIA_'))),
   };
   const filho = spawn(COMANDO[0], COMANDO.slice(1), { env, cwd: RAIZ, stdio: ['ignore', 'ignore', 'inherit'], shell: false });
-  const parar = () => { try { filho.kill(); } catch { /* já saiu */ } try { fs.unlinkSync(semente); } catch { /* já apagado */ } };
-  process.on('exit', parar);
-  for (let i = 0; i < 400; i++) { try { if ((await fetch(`http://127.0.0.1:${porta}/saude`)).status === 200) break; } catch { /* subindo */ } await new Promise((r) => setTimeout(r, 25)); }
+  const saiu = once(filho, 'exit');
+  const parar = () => { if (filho.exitCode === null && filho.signalCode === null) filho.kill(); };
+  const limpar = () => fs.rmSync(temporarios, { recursive: true, force: true });
+  const aoSair = () => { try { parar(); limpar(); } catch { /* melhor esforço na saída antecipada */ } };
+  process.once('exit', aoSair);
+  let pronto = false;
+  for (let i = 0; i < 400 && filho.exitCode === null && filho.signalCode === null; i++) {
+    try { pronto = (await fetch(`http://127.0.0.1:${porta}/saude`)).status === 200; } catch { /* subindo */ }
+    if (pronto) break;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  if (!pronto) {
+    parar();
+    await saiu;
+    limpar();
+    throw new Error('servidor de carga não ficou pronto');
+  }
   const agente = new http.Agent({ keepAlive: true, maxSockets: CONEX });
   const chamar = (metodo, caminho, corpo) => new Promise((resolve) => {
     const dados = corpo ? Buffer.from(JSON.stringify(corpo)) : null;
@@ -105,7 +125,7 @@ const pct = (v, p) => v.length ? v[Math.min(v.length - 1, Math.floor(v.length * 
     return { rotulo, segundos, conexoes: CONEX, total, rps: Math.round(total / segundos), status, p50: pct(lat, 0.5).toFixed(2), p95: pct(lat, 0.95).toFixed(2), p99: pct(lat, 0.99).toFixed(2), max: lat[lat.length - 1].toFixed(1), memoriaMB: amostras.filter(Number.isFinite) };
   }
 
-  console.log(`Servidor: ${COMANDO.join(' ')} (pid ${filho.pid}); cliente: ${CONEX} conexões, ${SEGUNDOS} s`);
+  console.log(`Servidor: ${COMANDO.join(' ')} (pid ${filho.pid}); banco solicitado: ${banco || 'memoria'}; cliente: ${CONEX} conexões, ${SEGUNDOS} s`);
   const mem0 = memoriaMB(filho.pid);
   const a = await fase('A) carga mista (40% GET agente, 20% disponibilidade, 20% POST reserva, 10% busca, 10% saude)', SEGUNDOS);
   console.log(JSON.stringify(a));
@@ -142,5 +162,8 @@ const pct = (v, p) => v.length ? v[Math.min(v.length - 1, Math.floor(v.length * 
   const falhou = a.status[0] || c.status[0] || a.status[500] || c.status[500] || falhas > 0 || respondidas < PARADAS || vivo !== 200;
   console.log(falhou ? 'RESULTADO: houve falha (status 0/500, conexão perdida ou servidor sem responder)' : 'RESULTADO: sem erros (nenhum status 0 ou 500, todas as conexões respondidas, servidor vivo)');
   parar();
+  await saiu;
+  limpar();
+  process.removeListener('exit', aoSair);
   process.exitCode = falhou ? 1 : 0;
 })();

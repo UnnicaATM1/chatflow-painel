@@ -17,7 +17,8 @@ use crate::util::{
     tam,
 };
 use one_store::{
-    Chave, Empresa, Json, Modulos, Plataforma, Repositorio, iguais_tempo_constante, iso_ms,
+    Ambiente, Chave, Empresa, ExcluirReserva, Json, Modulos, Plataforma, RemoverLayout,
+    RenomearAmbiente, Repositorio, iguais_tempo_constante, iso_ms,
 };
 use serde_json::{Map, json};
 use sha2::{Digest, Sha256};
@@ -370,16 +371,45 @@ async fn modulo_ligado<R: Repositorio>(repo: &R, id: &str, nome: &str) -> bool {
 }
 
 fn ambientes_json(e: &Empresa) -> Json {
-    Json::Array(
-        e.ambientes
-            .iter()
-            .map(|a| json!({ "nome": a.nome, "mesas": a.mesas.iter().map(|m| json!({ "id": m.id, "capacidade": m.capacidade, "reservavel": m.reservavel })).collect::<Vec<_>>() }))
-            .collect(),
-    )
+    Json::Array(e.ambientes.iter().map(ambiente_json).collect())
+}
+
+fn ambiente_json(ambiente: &Ambiente) -> Json {
+    json!({ "nome": ambiente.nome, "mesas": ambiente.mesas.iter().map(mesa_json).collect::<Vec<_>>() })
 }
 
 fn mesa_json(m: &one_store::Mesa) -> Json {
     json!({ "id": m.id, "capacidade": m.capacidade, "reservavel": m.reservavel })
+}
+
+async fn registrar_gestao<R: Repositorio>(
+    repo: &R,
+    empresa_id: &str,
+    entidade: &str,
+    id: &str,
+    acao: &str,
+    ator: &Ator,
+    (antes, depois): (Json, Json),
+) {
+    let mut ev = vec![
+        ("empresaId", empresa_id.into()),
+        ("entidade", entidade.into()),
+        ("entidadeId", id.into()),
+        ("acao", acao.into()),
+    ];
+    ev.extend(ator.pares());
+    ev.push(("antes", antes));
+    ev.push(("depois", depois));
+    registrar(repo, evento(ev)).await;
+}
+
+fn vinculos_json(reservas: &[(String, String)]) -> Json {
+    Json::Array(
+        reservas
+            .iter()
+            .map(|(id, mesa)| json!({ "id": id, "mesaId": mesa }))
+            .collect(),
+    )
 }
 
 enum Op {
@@ -410,10 +440,9 @@ async fn mudar_reserva<R: Repositorio>(
     if r["status"] == "indisponivel" {
         return Ok(r);
     }
-    let depois = repo.reserva_obter(lid, rid).await.map(|r| publica(&r));
     let (da, dd) = diff(
         antes.as_ref().and_then(Json::as_object),
-        depois.as_ref().and_then(Json::as_object),
+        r.get("reserva").and_then(Json::as_object),
     );
     if !dd.is_empty() {
         let acao = match (extra, dd.get("status").and_then(Json::as_str)) {
@@ -750,6 +779,110 @@ async fn rotear<R: Repositorio>(
             json!({ "id": l.id, "nome": nome, "modulos": modulos_json(l.modulos) }),
         );
     }
+    // PATCH/DELETE ambientes e DELETE mesas; o nome é o identificador do ambiente.
+    if p(0) == Some("empresas")
+        && partes.len() == 4
+        && matches!(
+            (p(2), m),
+            (Some("ambientes"), "PATCH" | "DELETE") | (Some("mesas"), "DELETE")
+        )
+    {
+        so_staff(staff)?;
+        let lid = dec(p(1).unwrap_or(""))?;
+        let id = dec(p(3).unwrap_or(""))?;
+        if !modulo_ligado(repo, &lid, "reservas").await {
+            return erro(404, "recurso \"reservas\" não habilitado para esta empresa");
+        }
+        if m == "PATCH" {
+            let corpo = ler_corpo(req, LIMITE_CORPO).await?;
+            let nome = corpo
+                .get("nome")
+                .and_then(Json::as_str)
+                .unwrap_or("")
+                .trim_matches(|c: char| (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}');
+            if nome.is_empty() || nome.chars().count() > 60 {
+                return erro(400, "nome do ambiente deve ter de 1 a 60 caracteres");
+            }
+            empresa(repo, &lid).await?;
+            return match repo.ambiente_renomear(&lid, &id, nome).await {
+                RenomearAmbiente::Inexistente => erro(404, "ambiente inexistente"),
+                RenomearAmbiente::NomeDuplicado => erro(409, "nome já usado"),
+                RenomearAmbiente::Ok(ambiente) => {
+                    if id != ambiente.nome {
+                        registrar_gestao(
+                            repo,
+                            &lid,
+                            "ambiente",
+                            &id,
+                            "ambiente_renomeado",
+                            &ator,
+                            (json!({ "nome": id }), json!({ "nome": ambiente.nome })),
+                        )
+                        .await;
+                    }
+                    passa(cors, 200, ambiente_json(&ambiente))
+                }
+            };
+        }
+        empresa(repo, &lid).await?;
+        let agora = crate::tempo::agora_minutos(ctx.plat.agora_ms(), &ctx.cfg.fuso)?;
+        let conflito = |reservas| {
+            passa(
+                cors,
+                409,
+                json!({ "erro": "mesa com reserva ativa", "reservas": reservas }),
+            )
+        };
+        if p(2) == Some("ambientes") {
+            return match repo.ambiente_remover(&lid, &id, agora).await {
+                RemoverLayout::Inexistente => erro(404, "ambiente inexistente"),
+                RemoverLayout::ReservasAtivas(reservas) => conflito(reservas),
+                RemoverLayout::Ok(ambiente, reservas) => {
+                    let mut antes = ambiente_json(&ambiente);
+                    antes["reservas"] = vinculos_json(&reservas);
+                    registrar_gestao(
+                        repo,
+                        &lid,
+                        "ambiente",
+                        &id,
+                        "ambiente_removido",
+                        &ator,
+                        (antes, Json::Null),
+                    )
+                    .await;
+                    let mesas: Vec<_> = ambiente.mesas.into_iter().map(|m| m.id).collect();
+                    passa(cors, 200, json!({ "ok": true, "mesasRemovidas": mesas }))
+                }
+            };
+        }
+        return match repo.mesa_remover(&lid, &id, agora).await {
+            RemoverLayout::Inexistente => erro(404, "mesa inexistente"),
+            RemoverLayout::ReservasAtivas(reservas) => conflito(reservas),
+            RemoverLayout::Ok((mesa, ambiente), reservas) => {
+                let mut antes = mesa_json(&mesa);
+                antes["ambiente"] = ambiente.into();
+                antes["reservas"] = vinculos_json(&reservas);
+                registrar_gestao(
+                    repo,
+                    &lid,
+                    "mesa",
+                    &id,
+                    "mesa_removida",
+                    &ator,
+                    (antes, Json::Null),
+                )
+                .await;
+                let mut desligadas: Vec<_> =
+                    reservas.into_iter().map(|(codigo, _)| codigo).collect();
+                desligadas.sort_unstable();
+                passa(
+                    cors,
+                    200,
+                    json!({ "ok": true, "reservasDesligadas": desligadas }),
+                )
+            }
+        };
+    }
     // PATCH /empresas/:id/mesas/:mesaId { capacidade?, reservavel? }
     if p(0) == Some("empresas") && p(2) == Some("mesas") && partes.len() == 4 && m == "PATCH" {
         so_staff(staff)?;
@@ -819,6 +952,29 @@ async fn rotear<R: Repositorio>(
         }
         if !codigo_reserva_valido(&rid) {
             return erro(404, "reserva inexistente");
+        }
+        if m == "DELETE" && q("definitivo") == Some("1") {
+            empresa(repo, &lid).await?;
+            return match repo.reserva_excluir(&lid, &rid).await {
+                ExcluirReserva::Inexistente => erro(404, "reserva inexistente"),
+                ExcluirReserva::Ativa => erro(409, "reserva ativa; cancele antes de excluir"),
+                ExcluirReserva::Ok(reserva) => {
+                    let mut antes = publica(&reserva);
+                    antes["inicio"] = reserva.inicio.into();
+                    antes["fim"] = reserva.fim.into();
+                    registrar_gestao(
+                        repo,
+                        &lid,
+                        "reserva",
+                        &rid,
+                        "reserva_excluida",
+                        &ator,
+                        (antes, Json::Null),
+                    )
+                    .await;
+                    passa(cors, 200, json!({ "ok": true }))
+                }
+            };
         }
         let op = if m == "DELETE" {
             Op::Cancelar

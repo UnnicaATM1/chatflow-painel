@@ -33,10 +33,11 @@ pub fn livres(
             if !m.reservavel || m.capacidade < pessoas {
                 continue;
             }
-            if !confirmadas
-                .iter()
-                .any(|r| r.mesa_id == m.id && i < r.fim && i + DURACAO_MIN > r.inicio)
-            {
+            if !confirmadas.iter().any(|r| {
+                r.mesa_id.as_deref() == Some(m.id.as_str())
+                    && i < r.fim
+                    && i + DURACAO_MIN > r.inicio
+            }) {
                 out.push(Livre {
                     mesa: m.clone(),
                     ambiente: amb.nome.clone(),
@@ -189,7 +190,7 @@ pub async fn reservar_detalhado<R: Repositorio>(repo: &R, p: &PedidoReserva) -> 
             id: String::new(),
             uuid: String::new(),
             empresa_id: p.empresa_id.clone(),
-            mesa_id: String::new(),
+            mesa_id: None,
             ambiente: String::new(),
             data: p.data.clone(),
             horario: p.horario.clone(),
@@ -323,7 +324,7 @@ pub async fn editar_reserva<R: Repositorio>(
     };
     let data = ou(m.data.as_ref(), &r.data);
     let horario = ou(m.horario.as_ref(), &r.horario);
-    let mesa_id = ou(m.mesa_id.as_ref(), &r.mesa_id);
+    let mesa_id = ou(m.mesa_id.as_ref(), r.mesa_id.as_deref().unwrap_or(""));
     let Some(pessoas) = pessoas.filter(|p| *p >= 1) else {
         return erro(400, "pessoas inválido");
     };
@@ -345,7 +346,7 @@ pub async fn editar_reserva<R: Repositorio>(
         pessoas,
         data: data.clone(),
         horario: horario.clone(),
-        mesa_id,
+        mesa_id: Some(mesa_id),
         ambiente: alvo.ambiente,
         inicio: ini,
         fim: ini + DURACAO_MIN,
@@ -379,7 +380,7 @@ pub async fn reativar_reserva<R: Repositorio>(repo: &R, empresa_id: &str, id: &s
         .await;
     let livre = livres(&l, &confirmadas, &r.data, &r.horario, r.pessoas, None)?
         .iter()
-        .any(|x| x.mesa.id == r.mesa_id);
+        .any(|x| Some(x.mesa.id.as_str()) == r.mesa_id.as_deref());
     if livre && let Muda::Ok(nova) = repo.reserva_reativar(empresa_id, id).await {
         return Ok(json!({ "status": "confirmada", "reserva": publica(&nova) }));
     }

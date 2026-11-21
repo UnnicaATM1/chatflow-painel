@@ -40,6 +40,8 @@ Os documentos do conhecimento (PDF, Word, Excel, texto) **não ficam dentro do b
 node scripts/backup-sqlite.js
 ```
 
+Atalho: `npm run backup` (mesmas variáveis de ambiente). Para restaurar: `npm run restaurar -- backups/<carimbo>` (o `--` repassa o argumento ao script; `--forcar` também).
+
 O que faz: abre o banco (mesmo em uso), usa a API de backup do `node:sqlite` (se a versão do Node não tiver, usa `VACUUM INTO`), grava em `CHATFLOW_BACKUP_DIR/<data UTC>/chatflow.sqlite` e, depois do snapshot do banco, copia `<banco>.arquivos/` para `CHATFLOW_BACKUP_DIR/<data UTC>/arquivos/`, tira o modo WAL da **cópia** (para não gerar `-wal`/`-shm` ao lado dela), confere na cópia `PRAGMA integrity_check` e `PRAGMA foreign_key_check`, **confere que todo anexo referenciado pelas linhas do conhecimento existe na cópia** (se o servidor apagou um no meio da cópia, refaz até 3 vezes; se continuar faltando, o backup falha, pois o banco aponta para arquivo perdido), **avisa sobre anexos órfãos** (arquivo sem linha no banco: sobra de uma gravação interrompida ou de limpeza pendente; é copiado mesmo assim e não impede o backup), grava `chatflow.sqlite.sha256` e só então renomeia a pasta de `.parcial` para o carimbo e apaga as cópias além das `CHATFLOW_BACKUP_MANTER` mais novas. Se qualquer verificação falhar, o script sai com código 1, remove a cópia incompleta e **não apaga nenhuma cópia antiga**. Só pastas com nome de carimbo são apagadas; qualquer outra coisa na pasta de backups fica intacta.
 
 ### Agenda
@@ -98,27 +100,40 @@ O banco guarda **nome e contato de clientes** das reservas (`nome_cliente`, `con
 - **Apagar a cópia**: `rm` comum basta se o disco é cifrado; sem cifra, trate a remoção como parcial (o dado pode permanecer no disco), mais um motivo para cifrar.
 - **Logs**: o script imprime só caminhos e tamanhos, nunca conteúdo.
 
-## 7. O que pedir ao T04 (repositório SQLite)
+## 7. Inicialização, encerramento e migrações do SQLite
 
 Situação em 2026-11-21, conferida em `src/sqlite/repositorio.js`:
 
 | Item | Estado |
 |---|---|
 | `PRAGMA journal_mode = WAL` (recusa se não conseguir) | Já feito |
-| `PRAGMA synchronous = FULL` | Já feito. Justificativa: com WAL, `NORMAL` pode perder as últimas transações confirmadas numa queda de energia (sem corromper); como cada reserva e cada evento de histórico é um dado de negócio e o volume é baixo, `FULL` custa pouco e evita perder reserva confirmada ao cliente. Só reduzir para `NORMAL` se medir gargalo. |
+| `PRAGMA synchronous = FULL` | Decisão do T00: preservar reservas confirmadas tem prioridade sobre vazão. Com WAL, `FULL` sincroniza cada commit. `NORMAL` pode perder transações confirmadas numa queda de energia. |
 | `PRAGMA busy_timeout` | Já feito (5000 ms) |
 | `PRAGMA foreign_keys = ON` | Já feito |
-| `integrity_check` na subida, com recusa de iniciar se falhar | Já feito (conferir que o erro sobe até `inicializar.js` e o processo termina com código diferente de zero, sem criar banco novo vazio por cima) |
+| `integrity_check` na subida | A falha impede a inicialização e aponta para a seção 5. |
+| Arquivo `<banco>.pid` | O servidor recusa outro PID vivo. O PID próprio, um PID morto e um marcador vazio ou ilegível são tratados como obsoletos. O novo PID é publicado por renomeação atômica. O marcador é removido após fechar a conexão. |
+| Encerramento por sinal | O servidor fecha conexões ociosas e aguarda requisições em andamento por até `CHATFLOW_DESLIGAR_MS` (padrão 10000 ms). Ao atingir o prazo ou receber um segundo sinal, fecha as conexões restantes e sai com código 1. Nos dois caminhos tenta `wal_checkpoint(TRUNCATE)` antes de fechar o banco e remover o PID. |
+| `wal_autocheckpoint` e `journal_size_limit` | Checkpoint automático a cada 1000 páginas. O limite de 64 MiB é para o espaço retido pelo journal após o SQLite poder reciclar o WAL. Durante um checkpoint bloqueado por leitura prolongada, o WAL pode ultrapassar esse valor. |
 
-**Ainda a pedir:**
+Faça backup antes de implantar uma versão com migração nova. O servidor aplica os arquivos numerados de `db/migrations/` em ordem, a partir de `PRAGMA user_version`. A próxima alteração de esquema entra como `0002_<descrição>.sql` e deve conter SQL sem comandos de controle de transação. Cada arquivo roda em uma transação própria e uma falha reverte o arquivo sem avançar a versão.
 
-1. **Arquivo de PID**: ao abrir um banco em arquivo, gravar `<banco>.pid` com `process.pid` e removê-lo em `fechar()` e na saída do processo; se na subida o `.pid` apontar para um processo vivo, **recusar iniciar** (impede o segundo escritor). O restaurador já lê esse arquivo.
-2. **Encerramento limpo**: tratar `SIGTERM` e `SIGINT` chamando `repositorio.fechar()`, para que o WAL seja incorporado e `-wal`/`-shm` removidos; hospedagens mandam `SIGTERM` em todo deploy.
-3. **`PRAGMA wal_autocheckpoint`** (o padrão de 1000 páginas serve) e **`PRAGMA journal_size_limit`** (por exemplo 64 MB) para o `-wal` não crescer sem limite se houver um leitor longo.
-4. **Falha de verificação com mensagem acionável**: o texto do erro de `integrity_check` deve apontar para `docs/operacao-sqlite.md`, seção 5.
-5. **Rotina de manutenção**: chamar `limparIdempotencia` (já existe) periodicamente e, se aprovada a LGPD, a anonimização por retenção; o backup diário não resolve isso.
-6. **`PRAGMA optimize`** ao fechar (barato, mantém as estatísticas dos índices).
-7. **Migrações**: o achado R2 de [revisao-persistencia-t04](revisao-persistencia-t04.md) (aplicar `0002` em diante) precisa estar resolvido **antes** do primeiro deploy com dados reais, e todo deploy com migração nova deve ser precedido de backup.
+Se a mensagem indicar outro PID vivo, verifique qual processo o possui antes de mexer no marcador. Só remova `<banco>.pid` manualmente após confirmar que nenhum servidor está usando o volume. O formato continua sendo uma linha com o PID, compatível com o restaurador. Em contêiner, mantenha um único servidor por volume.
+
+O Dockerfile instala o pacote Debian `tini` e executa `/usr/bin/tini` como PID 1. Ele encaminha o SIGTERM ao Node. Ao atualizar um volume que ainda tenha o marcador `1` da imagem anterior, o Node o reconhece como obsoleto quando o PID 1 é seu processo pai Tini. [Tini](https://github.com/krallin/tini#using-tini).
+
+No Windows, SIGTERM não é um mecanismo nativo de encerramento gracioso. Use Ctrl+C ou Ctrl+Break para encerrar o Node pelo console. `Stop-Process`, `taskkill /F`, fechar a janela do console (SIGHUP) e logoff podem terminar o processo sem executar os manipuladores. Uma saída que passa pelo evento `exit` do Node ainda tenta o checkpoint síncrono. Se um leitor externo impedir o checkpoint ou se a saída for forçada pelo sistema, preserve os arquivos WAL e SHM para recuperação na próxima abertura.
+
+O código usa 10 s por padrão. A imagem Docker define `CHATFLOW_DESLIGAR_MS=8000` para deixar margem ao checkpoint antes do SIGKILL padrão de `docker stop` no Linux. Se aumentar o prazo da aplicação, aumente também a janela de parada do contêiner. [Docker stop](https://docs.docker.com/reference/cli/docker/container/stop/).
+
+O exemplo `render.yaml` usa uma instância, `CHATFLOW_BANCO=sqlite` e `CHATFLOW_BANCO_ARQUIVO=/var/data/chatflow.sqlite` no disco persistente montado em `/var/data`. O Blueprint define `CHATFLOW_DESLIGAR_MS=10000` dentro da janela de 30 s do Render. [Encerramento no Render](https://render.com/docs/deploys#graceful-shutdown).
+
+Os testes executados no Windows dispararam os eventos de encerramento por IPC. A construção da imagem, o SIGTERM real e a recuperação após `kill -9` no contêiner seguem para homologação.
+
+Para medir Node com SQLite, execute `tests/carga.js` com `CARGA_COMANDO` apontando para `node src/server.js` e `CHATFLOW_BANCO=sqlite`. O script cria um banco temporário por execução. Se fornecer `CHATFLOW_BANCO_ARQUIVO`, use um banco descartável, pois a carga grava dados.
+
+Na verificação do repasse dessas variáveis no Windows, a carga usou 8 clientes, 3 segundos iniciais e 16 conexões simultâneas na fase de pico. As 16 conexões responderam e o SQLite no caminho informado continha 649 reservas ao fim.
+
+Ficam pendentes a rotina de manutenção periódica de idempotência, a anonimização por retenção após a decisão de LGPD e o uso de `PRAGMA optimize` no encerramento.
 
 ## 8. Lista de verificação do primeiro deploy
 

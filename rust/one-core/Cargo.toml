@@ -13,4 +13,6 @@ one-store = { path = "../one-store" }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 base64 = "0.22"
+chrono = { version = "0.4", default-features = false }
+chrono-tz = "0.10"
 unicode-normalization = "0.1"

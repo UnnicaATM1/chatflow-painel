@@ -24,7 +24,7 @@
       body: corpo ? JSON.stringify(corpo) : undefined,
     }).then(function (r) {
       return r.json().then(function (j) {
-        if (!r.ok) { var e = new Error(j.erro || 'Erro ' + r.status); e.status = r.status; throw e; }
+        if (!r.ok) { var e = new Error(j.erro || 'Erro ' + r.status); e.status = r.status; e.dados = j; throw e; }
         return j;
       });
     });
@@ -104,6 +104,11 @@
     var sd = useState(null), disp = sd[0], setDisp = sd[1];
     var sm = useState(''), msg = sm[0], setMsg = sm[1];
     var ativa = r.status === 'confirmada';
+    var sx = useState(false), confExcluir = sx[0], setConfExcluir = sx[1];
+    function excluirDefinitivo() {
+      api(p.token, 'DELETE', base + '?definitivo=1').then(function () { p.recarregar(); })
+        .catch(function (e) { setConfExcluir(false); setMsg(e.status === 409 ? 'Esta reserva está ativa. Cancele antes de excluir em definitivo.' : e.message); });
+    }
     function enviar(metodo, corpo) {
       api(p.token, metodo, base, corpo).then(function () { setMsg(''); setAberto(false); p.recarregar(); })
         .catch(function (e) {
@@ -132,7 +137,12 @@
         h('td', null, h('span', { className: 'k1-row', style: { gap: 4 } },
           ativa && h(K.Button, { variant: 'secondary', onClick: function () { setAberto(!aberto); if (!aberto) consultar({}); } }, 'Editar'),
           ativa && h(K.Button, { variant: 'danger', onClick: function () { enviar('DELETE'); } }, 'Cancelar'),
-          !ativa && h(K.Button, { variant: 'primary', onClick: function () { enviar('PATCH', { status: 'confirmada' }); } }, 'Reativar')))),
+          !ativa && !confExcluir && h(K.Button, { variant: 'primary', onClick: function () { enviar('PATCH', { status: 'confirmada' }); } }, 'Reativar'),
+          !ativa && !confExcluir && h(K.Button, { variant: 'danger', onClick: function () { setMsg(''); setConfExcluir(true); } }, 'Excluir')))),
+      confExcluir && h('tr', null, h('td', { colSpan: 7 }, h('div', { className: 'k1-row', role: 'alert' },
+        h('span', null, 'Excluir em definitivo a reserva #' + r.id + '? Não dá para desfazer. Fica um registro no histórico.'),
+        h(K.Button, { variant: 'danger', onClick: excluirDefinitivo }, 'Confirmar exclusão'),
+        h(K.Button, { variant: 'ghost', onClick: function () { setConfExcluir(false); } }, 'Cancelar')))),
       (msg && !aberto) && h('tr', null, h('td', { colSpan: 7, className: 'erro', role: 'alert' }, msg)),
       aberto && h('tr', null, h('td', { colSpan: 7 }, h('div', { className: 'k1-stack', style: { padding: '8px 0' } },
         h('div', { className: 'k1-row' },
@@ -213,20 +223,77 @@
             : h('div', null, 'Livre neste horário.'))));
   }
 
+  // Mensagem do 409 de remoção: lista as reservas ativas que impedem a operação.
+  function textoConflito(e, oQue) {
+    var lista = e.dados && Array.isArray(e.dados.reservas) ? e.dados.reservas : [];
+    var plural = lista.length > 1;
+    return 'Não dá para remover ' + oQue + ': há reserva' + (plural ? 's' : '') + ' ativa' + (plural ? 's' : '')
+      + (lista.length ? ' (' + lista.map(function (x) { return '#' + (x && typeof x === 'object' ? x.id : x); }).join(', ') + ')' : '')
+      + '. Cancele ' + (plural ? 'essas reservas' : 'a reserva') + ' na aba Reservas e tente de novo.';
+  }
+
   function LinhaMesa(p) {
     var m = p.mesa;
     var sc = useState(String(m.capacidade)), cap = sc[0], setCap = sc[1];
     var se = useState(''), msg = se[0], setMsg = se[1];
+    var sr = useState(false), confRemover = sr[0], setConfRemover = sr[1];
+    var conflito = msg.indexOf('Não dá para remover') === 0;
     function salvar(corpo) {
       api(p.token, 'PATCH', '/empresas/' + encodeURIComponent(p.empresa) + '/mesas/' + encodeURIComponent(m.id), corpo)
         .then(function () { setMsg('Salvo.'); p.recarregar(); }).catch(function (e) { setMsg(e.message); });
     }
-    return h('div', { className: 'k1-row', style: { padding: '6px 0' } },
-      h('b', { className: 'mono', style: { minWidth: 90 } }, m.id),
-      h('label', { className: 'k1-row' }, 'Lugares', h('input', { type: 'number', min: 1, max: 100, value: cap, style: { width: 72 }, onChange: function (e) { setCap(e.target.value); } })),
-      h(K.Button, { variant: 'secondary', onClick: function () { salvar({ capacidade: Number(cap) }); } }, 'Salvar'),
-      h(K.Button, { variant: m.reservavel ? 'neutral' : 'primary', onClick: function () { salvar({ reservavel: !m.reservavel }); } }, m.reservavel ? 'Bloquear reservas' : 'Liberar reservas'),
-      h('span', { className: 'rotulo' }, msg));
+    function remover() {
+      api(p.token, 'DELETE', '/empresas/' + encodeURIComponent(p.empresa) + '/mesas/' + encodeURIComponent(m.id))
+        .then(function () { p.recarregar(); })
+        .catch(function (e) { setConfRemover(false); setMsg(e.status === 409 ? textoConflito(e, 'a mesa ' + m.id) : e.message); });
+    }
+    return h('div', { className: 'k1-stack', style: { gap: 4 } },
+      h('div', { className: 'k1-row', style: { padding: '6px 0' } },
+        h('b', { className: 'mono', style: { minWidth: 90 } }, m.id),
+        h('label', { className: 'k1-row' }, 'Lugares', h('input', { type: 'number', min: 1, max: 100, value: cap, style: { width: 72 }, onChange: function (e) { setCap(e.target.value); } })),
+        h(K.Button, { variant: 'secondary', onClick: function () { salvar({ capacidade: Number(cap) }); } }, 'Salvar'),
+        h(K.Button, { variant: m.reservavel ? 'neutral' : 'primary', onClick: function () { salvar({ reservavel: !m.reservavel }); } }, m.reservavel ? 'Bloquear reservas' : 'Liberar reservas'),
+        !confRemover && h(K.Button, { variant: 'danger', 'aria-label': 'Remover a mesa ' + m.id, onClick: function () { setMsg(''); setConfRemover(true); } }, 'Remover mesa'),
+        !conflito && h('span', { className: 'rotulo' }, msg)),
+      confRemover && h('div', { className: 'k1-row', role: 'alert' },
+        h('span', null, 'Remover a mesa ' + m.id + '? Reservas canceladas ou passadas ficam sem mesa e continuam no histórico.'),
+        h(K.Button, { variant: 'danger', onClick: remover }, 'Confirmar remoção'),
+        h(K.Button, { variant: 'ghost', onClick: function () { setConfRemover(false); } }, 'Cancelar')),
+      conflito && h('div', { className: 'erro', role: 'alert' }, msg));
+  }
+
+  // Cabeçalho do ambiente: nome, renomear e remover (tudo na própria tela).
+  function CabecalhoAmbiente(p) {
+    var a = p.ambiente, idAmb = a.id !== undefined ? a.id : a.nome;
+    var base = '/empresas/' + encodeURIComponent(p.empresa) + '/ambientes/' + encodeURIComponent(idAmb);
+    var sm = useState('ver'), modo = sm[0], setModo = sm[1]; // ver | renomear | remover
+    var sn = useState(a.nome), nome = sn[0], setNome = sn[1];
+    var se = useState(''), msg = se[0], setMsg = se[1];
+    function renomear(ev) {
+      ev.preventDefault();
+      api(p.token, 'PATCH', base, { nome: nome.trim() })
+        .then(function () { setModo('ver'); setMsg(''); p.recarregar(); })
+        .catch(function (e) { setMsg(e.status === 409 ? 'Já existe um ambiente com esse nome.' : e.message); });
+    }
+    function remover() {
+      api(p.token, 'DELETE', base)
+        .then(function () { p.recarregar(); })
+        .catch(function (e) { setModo('ver'); setMsg(e.status === 409 ? textoConflito(e, 'o ambiente ' + a.nome) : e.message); });
+    }
+    return h('div', { className: 'k1-stack', style: { gap: 6, margin: '8px 0 4px' } },
+      h('div', { className: 'k1-row' },
+        h('div', { className: 'rotulo' }, a.nome),
+        modo === 'ver' && h(K.Button, { variant: 'secondary', 'aria-label': 'Renomear o ambiente ' + a.nome, onClick: function () { setNome(a.nome); setMsg(''); setModo('renomear'); } }, 'Renomear'),
+        modo === 'ver' && h(K.Button, { variant: 'danger', 'aria-label': 'Remover o ambiente ' + a.nome, onClick: function () { setMsg(''); setModo('remover'); } }, 'Remover ambiente')),
+      modo === 'renomear' && h('form', { className: 'k1-row', onSubmit: renomear },
+        h('input', { type: 'text', value: nome, maxLength: 60, 'aria-label': 'Novo nome do ambiente ' + a.nome, style: { minWidth: 220 }, onChange: function (e) { setNome(e.target.value); setMsg(''); } }),
+        h(K.Button, { type: 'submit', disabled: !nome.trim() || nome.trim() === a.nome }, 'Salvar nome'),
+        h(K.Button, { variant: 'ghost', onClick: function () { setModo('ver'); setMsg(''); } }, 'Cancelar')),
+      modo === 'remover' && h('div', { className: 'k1-row', role: 'alert' },
+        h('span', null, 'Remover o ambiente ' + a.nome + (a.mesas.length ? ' e as ' + a.mesas.length + ' mesa(s) dele' : '') + '? Se houver reserva ativa em alguma mesa, nada é removido.'),
+        h(K.Button, { variant: 'danger', onClick: remover }, 'Confirmar remoção'),
+        h(K.Button, { variant: 'ghost', onClick: function () { setModo('ver'); } }, 'Cancelar')),
+      msg && h('div', { className: 'erro', role: 'alert' }, msg));
   }
 
   function NomeEmpresa(p) {
@@ -337,7 +404,7 @@
       erro && h('div', { className: 'erro', role: 'alert' }, erro),
       reservasOn && est.ambientes.length === 0 && h(K.EmptyState, null, 'Nenhum ambiente cadastrado. Crie o primeiro abaixo para poder cadastrar mesas e receber reservas.'),
       reservasOn && est.ambientes.map(function (a) {
-        return h('div', { key: a.nome }, h('div', { className: 'rotulo', style: { margin: '8px 0 4px' } }, a.nome),
+        return h('div', { key: a.nome }, h(CabecalhoAmbiente, { ambiente: a, token: p.token, empresa: p.empresa, recarregar: carregar }),
           a.mesas.map(function (m) { return h(LinhaMesa, { key: m.id + m.capacidade + m.reservavel, mesa: m, token: p.token, empresa: p.empresa, recarregar: carregar }); }),
           h(NovaMesa, { key: 'nova-' + a.nome + a.mesas.length, ambiente: a.nome, token: p.token, empresa: p.empresa, recarregar: carregar }));
       }),
@@ -661,6 +728,7 @@
     var sj = useState(null), amostra = sj[0], setAmostra = sj[1];
     var sf = useState(0), recarga = sf[0], setRecarga = sf[1];
     var so = useState(BASE || location.origin), origem = so[0], setOrigem = so[1];
+    var sq = useState(''), conf = sq[0], setConf = sq[1]; // '' | 'gerar' | 'revogar': confirmação na própria tela
     var base = (BASE || location.origin) + '/empresas/' + encodeURIComponent(p.empresa);
     useEffect(function () {
       setSt(null); setBloqueio('');
@@ -669,12 +737,12 @@
     }, [p.empresa, p.token, recarga]);
 
     function gerar() {
-      if (st && st.ativa && !window.confirm('Já existe uma chave ativa. Gerar outra invalida a atual e o sistema de conversa deixa de funcionar até receber a nova. Continuar?')) return;
+      setConf('');
       api(p.token, 'POST', '/empresas/' + encodeURIComponent(p.empresa) + '/api/chave').then(function (r) { setNova(r.chave); setChaveTeste(r.chave); setTestes(null); setMsg(''); setRecarga(recarga + 1); })
         .catch(function (e) { setMsg(e.message); });
     }
     function revogar() {
-      if (!window.confirm('Revogar a chave desta empresa? O sistema de conversa perde o acesso imediatamente.')) return;
+      setConf('');
       api(p.token, 'DELETE', '/empresas/' + encodeURIComponent(p.empresa) + '/api/chave').then(function () { setNova(null); setMsg('Chave revogada.'); setRecarga(recarga + 1); })
         .catch(function (e) { setMsg(e.message); });
     }
@@ -771,8 +839,12 @@
           h('span', { className: 'k1-pill k1-pill-' + (st.ativa ? 'concluida' : 'pendente') }, st.ativa ? 'Chave ativa' : 'Sem chave'),
           st.ativa && h('span', { className: 'mono' }, st.prefixo + '…'),
           st.ativa && h('span', { className: 'rotulo' }, 'criada em ' + new Date(st.criadaEm).toLocaleString('pt-BR')),
-          h(K.Button, { onClick: gerar }, st.ativa ? 'Gerar nova chave' : 'Gerar chave'),
-          st.ativa && h(K.Button, { variant: 'danger', onClick: revogar }, 'Revogar')),
+          !conf && h(K.Button, { onClick: st.ativa ? function () { setMsg(''); setConf('gerar'); } : gerar }, st.ativa ? 'Gerar nova chave' : 'Gerar chave'),
+          !conf && st.ativa && h(K.Button, { variant: 'danger', onClick: function () { setMsg(''); setConf('revogar'); } }, 'Revogar')),
+        conf && h('div', { className: 'k1-row', role: 'alert' },
+          h('span', null, conf === 'gerar' ? 'Já existe uma chave ativa. Gerar outra invalida a atual e o sistema de conversa deixa de funcionar até receber a nova.' : 'Revogar a chave desta empresa? O sistema de conversa perde o acesso imediatamente.'),
+          h(K.Button, { variant: 'danger', onClick: conf === 'gerar' ? gerar : revogar }, conf === 'gerar' ? 'Confirmar nova chave' : 'Confirmar revogação'),
+          h(K.Button, { variant: 'ghost', onClick: function () { setConf(''); } }, 'Cancelar')),
         nova && h('div', { className: 'k1-stack', style: { background: 'var(--surface-sunken)', border: '1px solid var(--border-strong)', borderRadius: 8, padding: 12 } },
           h('div', { className: 'rotulo' }, 'Copie agora. Esta chave não será mostrada de novo.'),
           h('div', { className: 'k1-row' }, h('code', { className: 'mono', style: { wordBreak: 'break-all' } }, nova), h(K.Button, { variant: 'secondary', onClick: function () { copiar(nova); } }, 'Copiar'))),

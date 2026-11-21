@@ -6,11 +6,11 @@
 <!-- STATUS_START -->
 design-system: 60%
 telas-referencia: 100%
-frontend: 75%
-backend: 92%
+frontend: 76%
+backend: 95%
 planejamento-tela-01: 100%
-api-rust: 95%
-geral: 74%
+api-rust: 96%
+geral: 76%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -25,14 +25,15 @@ Regras deste bloco, sempre seguir:
 
 ## 📍 Onde paramos
 
-TASK-010 fechada com SQLite em disco em WAL, synchronous=FULL, busy_timeout, FK e verificação de integridade na abertura. Anexos ficam em `<arquivo-sqlite>.arquivos/`.
-TASK-012 em JS e SQLite usa UUID v4 interno e código público de reserva de oito caracteres por empresa. A carga legada emite códigos. O mapa mantém o formato anterior e ignorar inválido retorna 400. A suíte completa passou 97/97 em memória e SQLite.
-A TASK-013 preparou a configuração de produção em Node 24 e o verificador de persistência. Falta homologar o ambiente conforme `docs/publicacao-producao.md`.
+A Parte A da TASK-002 entregou as rotas de ambientes, mesas e exclusão definitiva de reserva em JS (memória e SQLite) e Rust. O contrato JSON foi enviado ao T04 antes da implementação em Rust.
+Os servidores Node e Rust entregam React e ReactDOM locais em `/app/vendor/` como JavaScript. A régua com o teste dos dois arquivos passou 63/63 em JS com memória e SQLite e 48 testes no binário Rust, com 15 internos do JS pulados.
+A próxima validação é testar os fluxos no painel do T04.
+TASK-001 (Banco de dados, T002): Contrato A entregue em memória e SQLite com as mesmas assinaturas (ambienteRenomear, ambienteRemover, mesaRemover, reservaExcluir; ambienteId = nome). Migração db/migrations/0002_reserva_mesa_nula.sql torna reservas.mesa_id nulo preservando dados; as mutações de reserva revalidam a mesa ao gravar. Testes em tests/contrato-a.test.js.
+TASK-014 reconfirmada: Dockerfile com tini, STOPSIGNAL SIGTERM e prazo de 8 s; SQLite com synchronous=FULL. npm run backup e npm run restaurar copiam o banco e a pasta .arquivos juntos (tests/backup-sqlite.test.js). Build Docker e kill -9 no contêiner seguem para um host com Docker.
 
 ## ✅ Pendências ativas
 
-- [ ] Homologar HTTPS, proxy, volume SQLite e restauração conjunta do banco e dos anexos conforme `docs/publicacao-producao.md`
-- [ ] Após o commit de congelamento, completar a operação do SQLite com arquivo .pid, encerramento com checkpoint, limite do journal e mecanismo para a migração 0002
+- [ ] Homologar HTTPS, proxy, volume SQLite, encerramento e recuperação após kill -9 em contêiner e restauração conjunta do banco e dos anexos conforme `docs/publicacao-producao.md`
 - [ ] Definir com o João o objetivo do projeto (app novo, protótipo ou só o design system) e a stack
 - [ ] Conferir tipografia e espaçamento do design system com o front-end real (valores são leituras visuais dos prints)
 - [ ] Validar o plano da tela 01, os breakpoints propostos e as referências ausentes de conversa preenchida, histórico móvel e apagamentos
@@ -42,14 +43,12 @@ A TASK-013 preparou a configuração de produção em Node 24 e o verificador de
 - [ ] Combinar com a equipe de integração o contrato final da API e a emissão/rotação dos tokens
 - [ ] Revisar premissas 🟡 de `_reversa_sdd/prd.md` (duração 90 min, métricas, LGPD)
 
-- [ ] Front A&B/Atendimento: criar/remover ambientes e mesas, excluir reserva em definitivo (hoje só cancela e reativa), modo escuro do A&B e layout móvel (hoje só visualização, edição de mesa e campos do agente)
-- [ ] Vendorizar React (hoje vem do unpkg) para funcionar sem internet no salão
+- [ ] Homologar no painel A&B/Atendimento as rotas de gestão de ambientes e mesas e de exclusão definitiva, incluindo 409 com os códigos de reserva ativos
+- [ ] Front A&B/Atendimento: validar modo escuro e layout móvel
 
 - [ ] Rastreabilidade por pessoa real: hoje o histórico guarda o papel do token (confiável) e o nome digitado no login (`X-Operador`, só um rótulo); para auditoria forte, emitir um token por usuário
 
 - [ ] Configurar HTTPS e chaves de API por empresa no deploy, com o token global de chat desativado
-- [ ] Remover ou renomear ambiente e remover mesa (hoje só criar); decidir o que fazer com reservas já ligadas a uma mesa removida
-
 - [ ] Exclusão de empresa: trocar a senha do administrador por algo forte (a atual tem 6 caracteres; o bloqueio de 5 erros / 15 min mitiga, mas é fraca) e, quando houver contas, trocar a senha única por login real de administrador; avaliar "restaurar empresa excluída" a partir do instantâneo gravado no histórico
 
 - [ ] LGPD: a reserva agora guarda nome e contato do cliente (e o histórico copia esses dados): definir prazo de retenção, base legal e como apagar a pedido do titular antes de usar com clientes reais
@@ -72,6 +71,7 @@ A TASK-013 preparou a configuração de produção em Node 24 e o verificador de
 
 ## 🧠 Aprendizados importantes
 
+- Reserva "ativa" para remover mesa ou ambiente = confirmada com fim maior que agora no relógio de parede da empresa (fuso de negócio). `ambienteId` do Contrato A é o nome do ambiente. A migração 0002 recria a tabela reservas e os gatilhos; novas migrações começam em 0003.
 - O `reservaId` público é um código por empresa. `reservas_codigos` preserva os códigos emitidos após exclusão da empresa. O UUID interno fica fora do HTTP.
 
 - Backup e restauração do SQLite precisam incluir o banco e seu diretório "<arquivo-sqlite>.arquivos/".
@@ -114,7 +114,8 @@ A TASK-013 preparou a configuração de produção em Node 24 e o verificador de
 - Painel desacoplado da API: `web/config.js` define `window.CHATFLOW_CONFIG.apiBase` (vazio = mesma origem). O painel usa caminhos relativos (`tokens.css`, `app.js`, `logo-chatflow.png`), então roda em `/app/` e em qualquer pasta estática. `/app` sem barra quebraria os assets: o servidor deve redirecionar para `/app/`.
 
 - Arquitetura de `src/` depois da TASK-005: tudo fora de `src/node/` é JavaScript padrão + Web API (um teste falha se aparecer `require(`, `node:`, `Buffer` ou `process.` lá). Serviços recebem o repositório (`store`) e usam só as funções dele, sempre com `await`. `criarStore()` devolve o repositório em memória; `addEmpresa(store, dados)` é async. `src/api.js` só reexporta `criarServidor`; `src/server.js` só importa `src/node/inicializar.js` (variáveis de ambiente, demo, `listen`). Os testes continuam em CommonJS e carregam o ESM com `require` (precisa de Node 20.19 ou mais novo; hoje 24).
-- Datas: `inicio` e `fim` das reservas são minutos absolutos (`minutosAbsolutos(data, horario)`), sem fuso. Data impossível (2026-02-30) ou hora fora de 00:00 a 23:59 agora dá 400 em vez de ser aceita com NaN. `CHATFLOW_FUSO` existe, mas nenhuma regra compara com "agora" ainda.
+- Datas: `inicio` e `fim` são minutos de relógio de parede. Para remover mesa ou ambiente, a reserva confirmada bloqueia a operação até `fim`, comparado com a hora local em `CHATFLOW_FUSO`.
+- Nas rotas de gestão, `ambienteId` é o nome atual codificado na URL. Remover mesa desvincula reservas elegíveis com `mesaId: null` e registra o vínculo anterior. Excluir reserva definitivamente exige cancelamento, preserva o código emitido e registra o instantâneo sem o UUID interno.
 - Teste ponta a ponta local: a porta 3456 costuma estar ocupada por outro servidor do ONE (versão antiga, de outra sessão); suba o seu em outra porta (`PORT=3911`) e mate só o PID que você iniciou.
 
 - Régua de contrato: `tests/api.test.js` roda em processo (padrão) ou contra qualquer binário com `CHATFLOW_SERVIDOR='["comando","arg"]'` (array JSON, sem shell). `CHATFLOW_SEMENTE_ARQUIVO` (JSON com empresas iniciais) existe nos dois servidores só para isso. Testes marcados `INTERNO` ficam pulados no modo externo. Rust: `rust/README.md`.
@@ -124,6 +125,8 @@ A TASK-013 preparou a configuração de produção em Node 24 e o verificador de
 - Em Windows, o teste de carga lê a memória com `Get-Process`; matar processos por nome (`pkill`, `Stop-Process -Name`) pode derrubar o servidor de outra sessão: mate só o PID que você subiu.
 
 ## 🚫 Armadilhas conhecidas
+
+- No Windows, os testes do servidor emitem os eventos de sinal por IPC, pois child.kill encerra o processo sem executar o manipulador.
 
 - A revisão alterou a migração inicial. Arquivos criados com o rascunho anterior já marcam user_version=1 e exigem migração própria para receber o esquema revisado preservando dados.
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.
@@ -139,6 +142,7 @@ A TASK-013 preparou a configuração de produção em Node 24 e o verificador de
 
 ## 📚 Histórico recente
 
+- 2026-11-21 — TASK-001 (Banco): Contrato A em memória e SQLite, migração 0002 (mesa_id nulo), TASK-014 reconfirmada, backup e restauração com npm run
 - 2026-11-21 — TASK-013: roteiro de produção, ambiente SQLite explícito e verificação local de persistência após reinício
 - 2026-11-21 — TASK-010: docs de persistência (D1, R2, LGPD, id de reserva), limpeza de idempotência em SQL com testes e revisão do esquema e do repositório SQLite do T04
 - 2026-11-15 — TASK-009: idempotência com validade e teto (JS e Rust), 5 testes novos no JS e 6 no Rust; memória sob carga estabilizada

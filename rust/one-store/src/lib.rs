@@ -36,6 +36,25 @@ pub enum Muda {
     Conflito,
 }
 
+pub enum RenomearAmbiente {
+    Ok(Ambiente),
+    Inexistente,
+    NomeDuplicado,
+}
+
+pub enum RemoverLayout<T> {
+    Ok(T, Vec<(String, String)>),
+    Inexistente,
+    ReservasAtivas(Vec<String>),
+}
+
+#[allow(clippy::large_enum_variant)]
+pub enum ExcluirReserva {
+    Ok(Reserva),
+    Inexistente,
+    Ativa,
+}
+
 /// Resultado de [`Repositorio::conhecimento_criar`].
 #[derive(Debug, Clone)]
 pub enum CriarItem {
@@ -78,6 +97,24 @@ pub trait Repositorio: Send + Sync {
     // ---------- ambientes e mesas ----------
     /// `false` se já existe ambiente com esse nome (sem diferenciar maiúsculas).
     fn ambiente_criar(&self, empresa_id: &str, nome: &str) -> impl Future<Output = bool> + Send;
+    fn ambiente_renomear(
+        &self,
+        empresa_id: &str,
+        ambiente_id: &str,
+        nome: &str,
+    ) -> impl Future<Output = RenomearAmbiente> + Send;
+    fn ambiente_remover(
+        &self,
+        empresa_id: &str,
+        ambiente_id: &str,
+        agora: i64,
+    ) -> impl Future<Output = RemoverLayout<Ambiente>> + Send;
+    fn mesa_remover(
+        &self,
+        empresa_id: &str,
+        mesa_id: &str,
+        agora: i64,
+    ) -> impl Future<Output = RemoverLayout<(Mesa, String)>> + Send;
     /// Cria a mesa com o próximo id livre; `None` se o ambiente não existe.
     fn mesa_criar(
         &self,
@@ -149,6 +186,11 @@ pub trait Repositorio: Send + Sync {
     ) -> impl Future<Output = Option<Reserva>> + Send;
     /// ATÔMICA: volta a confirmada rechecando a sobreposição.
     fn reserva_reativar(&self, empresa_id: &str, id: &str) -> impl Future<Output = Muda> + Send;
+    fn reserva_excluir(
+        &self,
+        empresa_id: &str,
+        id: &str,
+    ) -> impl Future<Output = ExcluirReserva> + Send;
 
     // ---------- base de conhecimento ----------
     fn conhecimento_listar(&self, empresa_id: &str) -> impl Future<Output = Vec<Json>> + Send;

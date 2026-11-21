@@ -1,8 +1,11 @@
 //! Repositório em memória (espelha `src/repositorio.js`).
 
-use crate::modelo::{Chave, Empresa, Mesa, Modulos, Reserva};
+use crate::modelo::{Ambiente, Chave, Empresa, Mesa, Modulos, Reserva};
 use crate::plataforma::{Plataforma, codigo_curto, codigo_seguinte, iso_ms, uuid};
-use crate::{CriarItem, CriarReserva, Json, Muda, Repositorio};
+use crate::{
+    CriarItem, CriarReserva, ExcluirReserva, Json, Muda, RemoverLayout, RenomearAmbiente,
+    Repositorio,
+};
 use serde_json::Map;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -98,7 +101,7 @@ pub struct Memoria {
 
 fn sobrepoe(r: &Reserva, mesa: &str, ini: i64, fim: i64, ignorar: Option<&str>) -> bool {
     ignorar != Some(r.id.as_str())
-        && r.mesa_id == mesa
+        && r.mesa_id.as_deref() == Some(mesa)
         && r.status == "confirmada"
         && ini < r.fim
         && fim > r.inicio
@@ -119,6 +122,46 @@ impl Estado {
     }
     fn empresa_mut(&mut self, id: &str) -> Option<&mut Empresa> {
         self.empresas.iter_mut().find(|e| e.id == id)
+    }
+
+    fn mesa_reservavel(&self, empresa: &str, ambiente: &str, mesa: &str, pessoas: i64) -> bool {
+        self.empresas
+            .iter()
+            .find(|e| e.id == empresa)
+            .and_then(|e| e.ambientes.iter().find(|a| a.nome == ambiente))
+            .is_some_and(|a| {
+                a.mesas
+                    .iter()
+                    .any(|m| m.id == mesa && m.reservavel && m.capacidade >= pessoas)
+            })
+    }
+
+    fn desvincular_mesas(
+        &mut self,
+        empresa_id: &str,
+        ids: &HashSet<&str>,
+        agora: i64,
+    ) -> Result<Vec<(String, String)>, Vec<String>> {
+        let mut vinculadas: Vec<_> = self
+            .reservas
+            .iter_mut()
+            .filter(|r| {
+                r.empresa_id == empresa_id && r.mesa_id.as_deref().is_some_and(|m| ids.contains(m))
+            })
+            .collect();
+        let mut ativas: Vec<_> = vinculadas
+            .iter()
+            .filter(|r| r.status == "confirmada" && r.fim > agora)
+            .map(|r| r.id.clone())
+            .collect();
+        if !ativas.is_empty() {
+            ativas.sort_unstable();
+            return Err(ativas);
+        }
+        Ok(vinculadas
+            .iter_mut()
+            .filter_map(|r| r.mesa_id.take().map(|mesa| (r.id.clone(), mesa)))
+            .collect())
     }
 }
 
@@ -311,11 +354,95 @@ impl Repositorio for Memoria {
         if e.ambientes.iter().any(|a| a.nome.to_lowercase() == n) {
             return false;
         }
-        e.ambientes.push(crate::modelo::Ambiente {
+        e.ambientes.push(Ambiente {
             nome: nome.to_string(),
             mesas: Vec::new(),
         });
         true
+    }
+
+    async fn ambiente_renomear(
+        &self,
+        empresa_id: &str,
+        ambiente_id: &str,
+        nome: &str,
+    ) -> RenomearAmbiente {
+        let mut est = self.est();
+        let Some(e) = est.empresa_mut(empresa_id) else {
+            return RenomearAmbiente::Inexistente;
+        };
+        let Some(pos) = e.ambientes.iter().position(|a| a.nome == ambiente_id) else {
+            return RenomearAmbiente::Inexistente;
+        };
+        let normalizado = nome.to_lowercase();
+        if e.ambientes
+            .iter()
+            .enumerate()
+            .any(|(i, a)| i != pos && a.nome.to_lowercase() == normalizado)
+        {
+            return RenomearAmbiente::NomeDuplicado;
+        }
+        e.ambientes[pos].nome = nome.to_string();
+        let atualizado = e.ambientes[pos].clone();
+        for r in &mut est.reservas {
+            if r.empresa_id == empresa_id && r.ambiente == ambiente_id {
+                r.ambiente = nome.to_string();
+            }
+        }
+        RenomearAmbiente::Ok(atualizado)
+    }
+
+    async fn ambiente_remover(
+        &self,
+        empresa_id: &str,
+        ambiente_id: &str,
+        agora: i64,
+    ) -> RemoverLayout<Ambiente> {
+        let mut est = self.est();
+        let Some(empresa_pos) = est.empresas.iter().position(|e| e.id == empresa_id) else {
+            return RemoverLayout::Inexistente;
+        };
+        let ambientes = &est.empresas[empresa_pos].ambientes;
+        let Some(pos) = ambientes.iter().position(|a| a.nome == ambiente_id) else {
+            return RemoverLayout::Inexistente;
+        };
+        let ids: Vec<_> = ambientes[pos].mesas.iter().map(|m| m.id.clone()).collect();
+        match est.desvincular_mesas(empresa_id, &ids.iter().map(String::as_str).collect(), agora) {
+            Ok(reservas) => {
+                RemoverLayout::Ok(est.empresas[empresa_pos].ambientes.remove(pos), reservas)
+            }
+            Err(ativas) => RemoverLayout::ReservasAtivas(ativas),
+        }
+    }
+
+    async fn mesa_remover(
+        &self,
+        empresa_id: &str,
+        mesa_id: &str,
+        agora: i64,
+    ) -> RemoverLayout<(Mesa, String)> {
+        let mut est = self.est();
+        let Some(empresa_pos) = est.empresas.iter().position(|e| e.id == empresa_id) else {
+            return RemoverLayout::Inexistente;
+        };
+        let ambientes = &est.empresas[empresa_pos].ambientes;
+        let Some((ambiente_pos, mesa_pos)) = ambientes
+            .iter()
+            .enumerate()
+            .find_map(|(i, a)| a.mesas.iter().position(|m| m.id == mesa_id).map(|j| (i, j)))
+        else {
+            return RemoverLayout::Inexistente;
+        };
+        match est.desvincular_mesas(empresa_id, &HashSet::from([mesa_id]), agora) {
+            Ok(reservas) => {
+                let ambiente = &mut est.empresas[empresa_pos].ambientes[ambiente_pos];
+                RemoverLayout::Ok(
+                    (ambiente.mesas.remove(mesa_pos), ambiente.nome.clone()),
+                    reservas,
+                )
+            }
+            Err(ativas) => RemoverLayout::ReservasAtivas(ativas),
+        }
     }
 
     async fn mesa_criar(
@@ -429,7 +556,9 @@ impl Repositorio for Memoria {
             return CriarReserva::Repetida(r);
         }
         for (mesa, ambiente) in candidatas {
-            if est.ocupada(empresa_id, &mesa, nova.inicio, nova.fim, None) {
+            if !est.mesa_reservavel(empresa_id, &ambiente, &mesa, nova.pessoas)
+                || est.ocupada(empresa_id, &mesa, nova.inicio, nova.fim, None)
+            {
                 continue;
             }
             let mut codigo = codigo_curto(self.plat.as_ref());
@@ -454,7 +583,7 @@ impl Repositorio for Memoria {
                 id: codigo,
                 uuid: uuid(self.plat.as_ref()),
                 empresa_id: empresa_id.to_string(),
-                mesa_id: mesa.clone(),
+                mesa_id: Some(mesa.clone()),
                 ambiente: ambiente.clone(),
                 status: "confirmada".into(),
                 ..nova
@@ -513,19 +642,18 @@ impl Repositorio for Memoria {
         contato: Option<String>,
     ) -> Muda {
         let mut est = self.est();
-        if est.ocupada(
-            empresa_id,
-            &dados.mesa_id,
-            dados.inicio,
-            dados.fim,
-            Some(id),
-        ) {
+        let Some(mesa_id) = dados.mesa_id.as_deref() else {
+            return Muda::Conflito;
+        };
+        if !est.mesa_reservavel(empresa_id, &dados.ambiente, mesa_id, dados.pessoas)
+            || est.ocupada(empresa_id, mesa_id, dados.inicio, dados.fim, Some(id))
+        {
             return Muda::Conflito;
         }
         let Some(r) = est
             .reservas
             .iter_mut()
-            .find(|r| r.id == id && r.empresa_id == empresa_id)
+            .find(|r| r.id == id && r.empresa_id == empresa_id && r.status == "confirmada")
         else {
             return Muda::Conflito;
         };
@@ -568,13 +696,12 @@ impl Repositorio for Memoria {
         if atual.status == "confirmada" {
             return Muda::Ok(atual);
         }
-        if est.ocupada(
-            empresa_id,
-            &atual.mesa_id,
-            atual.inicio,
-            atual.fim,
-            Some(id),
-        ) {
+        let Some(mesa_id) = atual.mesa_id.as_deref() else {
+            return Muda::Conflito;
+        };
+        if !est.mesa_reservavel(empresa_id, &atual.ambiente, mesa_id, atual.pessoas)
+            || est.ocupada(empresa_id, mesa_id, atual.inicio, atual.fim, Some(id))
+        {
             return Muda::Conflito;
         }
         match est
@@ -588,6 +715,21 @@ impl Repositorio for Memoria {
             }
             None => Muda::Conflito,
         }
+    }
+
+    async fn reserva_excluir(&self, empresa_id: &str, id: &str) -> ExcluirReserva {
+        let mut est = self.est();
+        let Some(pos) = est
+            .reservas
+            .iter()
+            .position(|r| r.empresa_id == empresa_id && r.id == id)
+        else {
+            return ExcluirReserva::Inexistente;
+        };
+        if est.reservas[pos].status != "cancelada" {
+            return ExcluirReserva::Ativa;
+        }
+        ExcluirReserva::Ok(est.reservas.remove(pos))
     }
 
     async fn conhecimento_listar(&self, empresa_id: &str) -> Vec<Json> {
@@ -800,7 +942,27 @@ mod testes {
 
     fn repo(ttl: i64, max: usize) -> (Memoria, Arc<Relogio>) {
         let r = Arc::new(Relogio(AtomicI64::new(1_000_000)));
-        (Memoria::nova(r.clone(), None).com_idempotencia(ttl, max), r)
+        let m = Memoria::nova(r.clone(), None).com_idempotencia(ttl, max);
+        semear_empresa(&m, "e1");
+        semear_empresa(&m, "e2");
+        (m, r)
+    }
+
+    fn semear_empresa(m: &Memoria, id: &str) {
+        bloquear(m.empresa_criar(Empresa::nova(
+            id,
+            id,
+            json!({}),
+            vec![Ambiente {
+                nome: "salao".into(),
+                mesas: vec![Mesa {
+                    id: "S1".into(),
+                    capacidade: 4,
+                    reservavel: true,
+                }],
+            }],
+            Modulos::default(),
+        )));
     }
 
     #[test]
@@ -881,7 +1043,7 @@ mod testes {
             id: String::new(),
             uuid: String::new(),
             empresa_id: "e1".into(),
-            mesa_id: String::new(),
+            mesa_id: None,
             ambiente: String::new(),
             data: "2026-11-20".into(),
             horario: "20:00".into(),
@@ -917,12 +1079,14 @@ mod testes {
             .chain(sorteios)
             .map(|b| vec![b; 16])
             .collect();
-        Memoria::nova(
+        let m = Memoria::nova(
             Arc::new(Roteiro {
                 fila: Mutex::new(fila),
             }),
             None,
-        )
+        );
+        semear_empresa(&m, "e1");
+        m
     }
 
     fn criar(m: &Memoria, empresa: &str, inicio: i64) -> Reserva {
@@ -983,18 +1147,23 @@ mod testes {
     }
 
     #[test]
-    fn codigo_nao_e_reaproveitado_nem_apos_cancelar_nem_apos_excluir_a_empresa() {
+    fn codigo_nao_e_reaproveitado_apos_excluir_a_reserva_ou_a_empresa() {
         let m = repo_roteiro(vec![0, 9, 0, 1, 9, 0, 2, 9]);
         let r1 = criar(&m, "e1", 1000);
         assert_eq!(r1.id, "22222222");
         assert!(bloquear(m.reserva_cancelar("e1", &r1.id)).is_some());
+        assert!(matches!(
+            bloquear(m.reserva_excluir("e1", &r1.id)),
+            ExcluirReserva::Ok(_)
+        ));
         assert_eq!(
             criar(&m, "e1", 2000).id,
             "33333333",
-            "cancelada ainda ocupa o código"
+            "a exclusão definitiva mantém o código emitido"
         );
         bloquear(m.empresa_excluir("e1", json!({ "empresaId": "e1", "acao": "excluida" })));
         assert!(bloquear(m.reserva_obter("e1", "22222222")).is_none());
+        semear_empresa(&m, "e1");
         assert_eq!(
             criar(&m, "e1", 3000).id,
             "44444444",

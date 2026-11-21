@@ -2,14 +2,17 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } = require('node:fs');
+const { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { dirname, join, resolve } = require('node:path');
 const { once } = require('node:events');
+const { spawn } = require('node:child_process');
+const net = require('node:net');
 const { randomUUID } = require('node:crypto');
 const { Worker } = require('node:worker_threads');
 const { DatabaseSync } = require('node:sqlite');
 const { criarRepositorioSqlite } = require('../src/sqlite/repositorio');
+const { aplicarMigracoesSqlite } = require('../src/sqlite/migracoes');
 const { criarRepositorioMemoria } = require('../src/repositorio');
 const { plataformaWeb } = require('../src/plataforma');
 const { criarContexto, tratar } = require('../src/nucleo');
@@ -378,4 +381,105 @@ test('SQLite: banco em disco usa WAL e recusa abertura com mensagem de integrida
   const corrompido = join(dirname(caminho), 'corrompido.sqlite');
   writeFileSync(corrompido, Buffer.alloc(4096, 0xff));
   assert.throws(() => criarRepositorioSqlite({ caminho: corrompido }), /Integridade do SQLite falhou.*corrompido\.sqlite/);
+});
+
+test('SQLite: aplica 0002 sobre a versão 1, só uma vez, e reverte uma migração defeituosa', async (t) => {
+  const { caminho, abrir, fechar, abrirSql } = arquivoDeTeste(t);
+  const store = abrir();
+  await store.empresaCriar(empresa);
+  await fechar(store);
+  const db = abrirSql();
+  const pasta = dirname(caminho);
+  const versao = db.prepare('PRAGMA user_version');
+  assert.equal(versao.get().user_version, 2);
+  writeFileSync(join(pasta, '0001_inicial.sql'), 'SELECT 1;');
+  writeFileSync(join(pasta, '0002_reserva_mesa_nula.sql'), 'SELECT 1;');
+  writeFileSync(join(pasta, '0003_prova.sql'), "CREATE TABLE prova (nome TEXT); INSERT INTO prova VALUES ('uma vez');");
+  aplicarMigracoesSqlite(db, pasta);
+  aplicarMigracoesSqlite(db, pasta);
+  assert.equal(versao.get().user_version, 3);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM prova').get().n, 1);
+  assert.equal(db.prepare('SELECT nome FROM empresas WHERE id = ?').get(empresa.id).nome, empresa.nome);
+
+  writeFileSync(join(pasta, '0004_falha.sql'), "INSERT INTO prova VALUES ('rollback'); INSERT INTO inexistente VALUES (1);");
+  assert.throws(() => aplicarMigracoesSqlite(db, pasta), /Falha na migração SQLite 0004_falha\.sql/);
+  assert.equal(versao.get().user_version, 3);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM prova').get().n, 1);
+});
+
+test('Node SQLite: PID exclusivo e checkpoint em SIGTERM, SIGINT e process.exit', { timeout: 20000 }, async (t) => {
+  const { caminho } = arquivoDeTeste(t);
+  const pid = `${caminho}.pid`;
+  const wal = `${caminho}-wal`;
+  const tcp = net.createServer();
+  tcp.listen(0);
+  await once(tcp, 'listening');
+  const porta = tcp.address().port;
+  await new Promise((resolve) => tcp.close(resolve));
+  const entrada = resolve(__dirname, '../src/server.js');
+  const windows = process.platform === 'win32';
+  const filhos = new Map();
+  const abortado = new Promise((_, reject) => t.signal.addEventListener('abort', () => reject(t.signal.reason), { once: true }));
+
+  function iniciar(comIpc = windows) {
+    // O Windows termina o processo à força em child.kill('SIGTERM'); dispare o
+    // mesmo evento do Node via IPC para exercitar a rotina de encerramento.
+    const comandoWindows = `process.once('message', (sinal) => {
+      if (sinal === 'EXIT') process.exit(17);
+      process.emit(sinal);
+    }); import(require('node:url').pathToFileURL(${JSON.stringify(entrada)}).href);`;
+    const filho = spawn(process.execPath, comIpc ? ['-e', comandoWindows] : [entrada], {
+      env: { ...process.env, PORT: String(porta), CHATFLOW_BANCO: 'sqlite', CHATFLOW_BANCO_ARQUIVO: caminho,
+        CHATFLOW_SEMENTE_ARQUIVO: '', CHATFLOW_HISTORICO_ARQUIVO: '', CHATFLOW_DEMO: '1', CHATFLOW_TOKEN_CLIENTE: 'teste' },
+      stdio: comIpc ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
+    });
+    const fim = once(filho, comIpc ? 'exit' : 'close');
+    filhos.set(filho, fim);
+    let stderr = '';
+    filho.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    const pronto = once(filho.stdout, 'data').then(([chunk]) => /API na porta/.test(String(chunk)));
+    return { filho, fim, pronto, stderr: () => stderr };
+  }
+
+  try {
+    for (const sinal of ['SIGTERM', 'SIGINT', 'EXIT']) {
+      const comIpc = windows || sinal === 'EXIT';
+      const principal = iniciar(comIpc);
+      assert.equal(await Promise.race([principal.pronto, principal.fim.then(() => false), abortado]), true, principal.stderr());
+      assert.equal(Number(readFileSync(pid, 'utf8').trim()), principal.filho.pid);
+      if (sinal === 'EXIT') {
+        const gravada = await fetch(`http://127.0.0.1:${porta}/empresas`, {
+          method: 'POST',
+          headers: { authorization: 'Bearer teste', 'content-type': 'application/json' },
+          body: JSON.stringify({ nome: 'Empresa no caminho de exit' }),
+        });
+        assert.equal(gravada.status, 201);
+        assert.ok(statSync(wal).size > 0);
+      }
+      if (sinal === 'SIGTERM') assert.ok(statSync(wal).size > 0);
+      const concorrente = iniciar(false);
+      const [codigo] = await Promise.race([concorrente.fim, abortado]);
+      assert.equal(codigo, 1);
+      assert.match(concorrente.stderr(), /SQLite parece estar rodando/);
+      assert.equal(Number(readFileSync(pid, 'utf8').trim()), principal.filho.pid);
+
+      if (comIpc) principal.filho.send(sinal);
+      else principal.filho.kill(sinal);
+      assert.deepEqual(await Promise.race([principal.fim, abortado]), [sinal === 'EXIT' ? 17 : 0, null], principal.stderr());
+      assert.equal(existsSync(pid), false);
+      assert.equal(existsSync(wal), false);
+      assert.equal(existsSync(`${caminho}-shm`), false);
+      // A próxima inicialização deve substituir um PID de processo que já saiu.
+      if (sinal === 'SIGTERM') writeFileSync(pid, '2147483646\n');
+      if (sinal === 'SIGINT') writeFileSync(pid, '');
+    }
+    const reaberto = criarRepositorioSqlite({ caminho });
+    try { assert.equal((await reaberto.empresaListar()).length, 4); }
+    finally { await reaberto.fechar(); }
+  } finally {
+    for (const [filho, fim] of filhos) {
+      if (filho.exitCode === null && filho.signalCode === null) filho.kill('SIGKILL');
+      await fim;
+    }
+  }
 });

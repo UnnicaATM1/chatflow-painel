@@ -48,7 +48,11 @@ async function lancar(env) {
   const filho = spawn(cmd[0], cmd.slice(1), { env: { ...base, ...env }, stdio: ['ignore', 'ignore', 'inherit'], shell: false });
   FILHOS.add(filho);
   let saiu = false;
-  filho.once('exit', () => { saiu = true; });
+  const saida = new Promise((resolve) => filho.once('exit', () => {
+    saiu = true;
+    FILHOS.delete(filho);
+    resolve();
+  }));
   const url = `http://127.0.0.1:${porta}`;
   const limite = Date.now() + 15000;
   for (;;) {
@@ -57,7 +61,7 @@ async function lancar(env) {
     if (Date.now() > limite) { filho.kill(); throw new Error('o servidor não respondeu /saude em 15 s'); }
     await new Promise((r) => setTimeout(r, 25));
   }
-  return { base: url, fechar: () => { FILHOS.delete(filho); filho.kill(); } };
+  return { base: url, fechar: () => { if (!saiu) filho.kill(); return saida; } };
 }
 
 // opcoes: corsOrigens, confiarProxy, adminSenha (null = sem senha), semente (empresas iniciais), agora (só em processo).
@@ -74,12 +78,13 @@ async function subir(opcoes = {}) {
       ...(adminSenha ? { CHATFLOW_ADMIN_SENHA: adminSenha } : {}),
       ...(resto.corsOrigens ? { CHATFLOW_CORS_ORIGENS: resto.corsOrigens.join(',') } : {}),
       ...(resto.confiarProxy ? { CHATFLOW_CONFIAR_PROXY: '1' } : {}),
+      ...(resto.fuso ? { CHATFLOW_FUSO: resto.fuso } : {}),
     };
     const srv = await lancar(env);
     base = srv.base;
-    fechar = () => { srv.fechar(); try { fs.unlinkSync(arq); } catch { /* já apagado */ } };
+    fechar = async () => { await srv.fechar(); try { fs.unlinkSync(arq); } catch { /* já apagado */ } };
   } else {
-    const s = criarStore();
+    const s = criarStore({ fuso: resto.fuso });
     for (const e of JSON.parse(JSON.stringify(semente))) await addEmpresa(s, e);
     const srv = criarServidor(s, T, { ...(adminSenha ? { adminSenha } : {}), ...resto });
     await new Promise((r) => srv.listen(0, r));
@@ -160,6 +165,139 @@ test('listagens, estrutura, edição de mesa e front estático', async () => {
   assert.strictEqual((await f('/app/app.js')).status, 200);
   assert.strictEqual((await f('/app/..%2fsrc%2fapi.js')).status, 404);
   fechar();
+});
+
+test('gestão de ambientes e mesas: renomeia, bloqueia remoção ativa e desliga reservas elegíveis', async (t) => {
+  const { f, fechar } = await subir({ semente: [{
+    ...SEMENTE_PADRAO[0],
+    ambientes: [
+      { nome: 'Salão/A', mesas: ['A1', 'A2'].map((id) => ({ reservavel: true, capacidade: 4, id })) },
+      { nome: 'Varanda', mesas: [] },
+    ],
+  }] });
+  t.after(fechar);
+  const chamar = async (caminho, method, body, token = T.cliente) => {
+    const r = await f('/empresas/empresa_1' + caminho, { token, method, body, headers: { 'X-Operador': 'Marina' } });
+    return [r.status, await r.text()];
+  };
+  const reservarMesa = async (mesaId, data, chave) => {
+    const r = await f('/empresas/empresa_1/reservas', {
+      token: T.chat, method: 'POST', body: { ...res, ambiente: undefined, mesaId, data }, headers: { 'Idempotency-Key': chave },
+    });
+    assert.strictEqual(r.status, 201);
+    return (await r.json()).reservaId;
+  };
+  const ativo = await reservarMesa('A2', '2099-01-01', 'ativo');
+  const passado = await reservarMesa('A1', '2000-01-01', 'passado');
+  const cancelado = await reservarMesa('A2', '2099-01-02', 'cancelado');
+  assert.strictEqual((await chamar('/reservas/' + cancelado, 'DELETE'))[0], 200);
+  const antigo = '/ambientes/' + encodeURIComponent('Salão/A');
+  assert.deepStrictEqual(await chamar(antigo, 'PATCH', { nome: 'varanda' }), [409, '{"erro":"nome já usado"}']);
+  for (const nome of ['', 9, 'á'.repeat(61)]) {
+    assert.deepStrictEqual(await chamar(antigo, 'PATCH', { nome }), [400, '{"erro":"nome do ambiente deve ter de 1 a 60 caracteres"}']);
+  }
+  assert.deepStrictEqual(await chamar(antigo, 'PATCH', { nome: ' Salão Novo ' }, T.integracao), [
+    200, '{"nome":"Salão Novo","mesas":[{"id":"A1","capacidade":4,"reservavel":true},{"id":"A2","capacidade":4,"reservavel":true}]}',
+  ]);
+  assert.deepStrictEqual(await chamar(antigo, 'DELETE'), [404, '{"erro":"ambiente inexistente"}']);
+  const novo = '/ambientes/' + encodeURIComponent('Salão Novo');
+  const conflito = [409, JSON.stringify({ erro: 'mesa com reserva ativa', reservas: [ativo] })];
+  assert.deepStrictEqual(await chamar(novo, 'DELETE'), conflito);
+  assert.deepStrictEqual(await chamar('/mesas/A2', 'DELETE'), conflito);
+  const listar = async (caminho) => JSON.parse((await chamar(caminho, 'GET'))[1]);
+  const relacoes = async () => Object.fromEntries((await listar('/reservas')).map((r) => [r.id, r.mesaId]));
+  assert.ok((await listar('/reservas')).every((r) => r.ambiente === 'Salão Novo'));
+  assert.deepStrictEqual(await relacoes(), { [ativo]: 'A2', [passado]: 'A1', [cancelado]: 'A2' });
+  assert.deepStrictEqual(await chamar('/mesas/A1', 'DELETE'), [200, JSON.stringify({ ok: true, reservasDesligadas: [passado] })]);
+  assert.deepStrictEqual(await chamar('/mesas/A1', 'DELETE'), [404, '{"erro":"mesa inexistente"}']);
+  assert.strictEqual((await chamar('/reservas/' + ativo, 'DELETE'))[0], 200);
+  assert.deepStrictEqual(await chamar(novo, 'DELETE', undefined, T.integracao), [200, '{"ok":true,"mesasRemovidas":["A2"]}']);
+  assert.deepStrictEqual(await relacoes(), { [ativo]: null, [passado]: null, [cancelado]: null });
+  assert.deepStrictEqual((await listar('/estrutura')).ambientes, [{ nome: 'Varanda', mesas: [] }]);
+
+  const historico = (await listar('/historico')).filter((e) => e.entidade === 'ambiente' || e.entidade === 'mesa');
+  assert.deepStrictEqual(historico.map((e) => [e.acao, e.papel, e.operador, e.entidadeId, e.depois]), [
+    ['ambiente_removido', 'integracao', 'Marina', 'Salão Novo', null],
+    ['mesa_removida', 'cliente', 'Marina', 'A1', null],
+    ['ambiente_renomeado', 'integracao', 'Marina', 'Salão/A', { nome: 'Salão Novo' }],
+  ]);
+  assert.deepStrictEqual(historico[1].antes.reservas, [{ id: passado, mesaId: 'A1' }]);
+  assert.deepStrictEqual(historico[2].antes, { nome: 'Salão/A' });
+});
+
+test('exclusão definitiva exige cancelamento e guarda o instantâneo no histórico', async (t) => {
+  const { f, fechar } = await subir();
+  t.after(fechar);
+  const base = '/empresas/empresa_1';
+  const post = await f(base + '/reservas', {
+    token: T.chat, method: 'POST', body: { ...res, nomeCliente: 'Carlos', contato: 'carlos@example.com' },
+    headers: { 'Idempotency-Key': 'excluir' },
+  });
+  assert.strictEqual(post.status, 201);
+  const { reservaId } = await post.json();
+  const rota = base + '/reservas/' + reservaId;
+  const del = async (query) => {
+    const r = await f(rota + query, { token: T.cliente, method: 'DELETE' });
+    return [r.status, await r.text()];
+  };
+  assert.deepStrictEqual(await del('?definitivo=1'), [409, '{"erro":"reserva ativa; cancele antes de excluir"}']);
+  const [status, corpo] = await del('?definitivo=0');
+  assert.strictEqual(status, 200);
+  const { reserva } = JSON.parse(corpo);
+  assert.strictEqual(reserva.status, 'cancelada');
+  assert.deepStrictEqual(await del('?definitivo=1'), [200, '{"ok":true}']);
+  assert.deepStrictEqual(await del('?definitivo=1'), [404, '{"erro":"reserva inexistente"}']);
+  assert.deepStrictEqual(await (await f(base + '/reservas', { token: T.cliente })).json(), []);
+  const eventos = await (await f(base + '/historico?entidade=reserva&id=' + reservaId, { token: T.cliente })).json();
+  const exclusoes = eventos.filter((e) => e.acao === 'reserva_excluida');
+  assert.strictEqual(exclusoes.length, 1);
+  const [exclusao] = exclusoes;
+  assert.deepStrictEqual(Object.keys(exclusao.antes), [...Object.keys(reserva), 'inicio', 'fim']);
+  const { inicio, fim, ...dados } = exclusao.antes;
+  assert.deepStrictEqual(dados, reserva);
+  assert.strictEqual(fim - inicio, 90);
+  assert.strictEqual(exclusao.depois, null);
+});
+
+test('remoção de mesa usa o fuso de negócio para decidir se a reserva terminou', async (t) => {
+  const { f, fechar } = await subir({ fuso: 'Etc/GMT+12' });
+  t.after(fechar);
+  // Seis horas atrás em UTC ainda está seis horas à frente no relógio UTC-12.
+  const instante = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+  const base = '/empresas/empresa_1';
+  const reserva = await f(base + '/reservas', {
+    token: T.chat, method: 'POST', body: { ...res, data: instante.slice(0, 10), horario: instante.slice(11, 16) },
+    headers: { 'Idempotency-Key': 'fuso' },
+  });
+  assert.strictEqual(reserva.status, 201);
+  const { reservaId } = await reserva.json();
+  const remover = await f(base + '/mesas/S1', { token: T.cliente, method: 'DELETE' });
+  assert.strictEqual(remover.status, 409);
+  assert.deepStrictEqual(await remover.json(), { erro: 'mesa com reserva ativa', reservas: [reservaId] });
+});
+
+test('gestão de ambientes, mesas e exclusão definitiva exige equipe e módulo reservas ligado', async (t) => {
+  const { f, fechar } = await subir();
+  t.after(fechar);
+  const base = '/empresas/empresa_1';
+  const chave = await f(base + '/api/chave', { token: T.integracao, method: 'POST' });
+  assert.strictEqual(chave.status, 201);
+  const { chave: token } = await chave.json();
+  const desligar = await f(base + '/modulos', { token: T.cliente, method: 'PATCH', body: { reservas: false } });
+  assert.strictEqual(desligar.status, 200);
+  for (const [method, caminho, body] of [
+    ['PATCH', '/ambientes/salao', { nome: 'Novo' }],
+    ['DELETE', '/ambientes/salao'],
+    ['DELETE', '/mesas/S1'],
+    ['DELETE', '/reservas/22222222?definitivo=1'],
+  ]) {
+    const bloqueado = await f(base + caminho, { token, method, body });
+    assert.strictEqual(bloqueado.status, 403);
+    assert.deepStrictEqual(await bloqueado.json(), { erro: 'sem permissão' });
+    const recurso = await f(base + caminho, { token: T.integracao, method, body });
+    assert.strictEqual(recurso.status, 404);
+    assert.deepStrictEqual(await recurso.json(), { erro: 'recurso "reservas" não habilitado para esta empresa' });
+  }
 });
 
 test('disponibilidade por ambiente e reserva em mesa escolhida', async () => {
@@ -946,6 +1084,19 @@ test('GET /app/config.js é servido como JavaScript', async () => {
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.headers.get('content-type'), 'text/javascript; charset=utf-8');
   fechar();
+});
+
+test('GET /app/vendor entrega os dois arquivos locais do React como JavaScript', async (t) => {
+  const { readFile } = require('node:fs/promises');
+  const { join } = require('node:path');
+  const { f, fechar } = await subir();
+  t.after(fechar);
+  for (const nome of ['react.production.min.js', 'react-dom.production.min.js']) {
+    const r = await f('/app/vendor/' + nome);
+    assert.strictEqual(r.status, 200, nome);
+    assert.strictEqual(r.headers.get('content-type'), 'text/javascript; charset=utf-8', nome);
+    assert.deepStrictEqual(Buffer.from(await r.arrayBuffer()), await readFile(join(__dirname, '..', 'web', 'vendor', nome)), nome);
+  }
 });
 
 test('CORS: sem a variável, OPTIONS responde 204 sem nenhum cabeçalho Access-Control-*', async () => {

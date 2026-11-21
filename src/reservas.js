@@ -140,6 +140,7 @@ export async function editarReserva(store, empresaId, id, mudancas) {
 export async function cancelarReserva(store, empresaId, id) {
   await achar(store, empresaId, id);
   const r = await store.reservaCancelar(empresaId, id);
+  if (!r) throw erro('reserva inexistente', 404);
   return { status: 'cancelada', reserva: publica(r) };
 }
 
