@@ -1,15 +1,16 @@
 # 🔄 Handoff de Turno — ChatFlow Painel
-> Última atualização: 2026-11-15 — por: Claude Code
+> Última atualização: 2026-11-21 — por: Codex
 
 ## 📊 Status
+
 <!-- STATUS_START -->
 design-system: 60%
 telas-referencia: 100%
 frontend: 75%
-backend: 86%
+backend: 90%
 planejamento-tela-01: 100%
 api-rust: 95%
-geral: 71%
+geral: 73%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -23,20 +24,17 @@ Regras deste bloco, sempre seguir:
   ou criada — nunca deixe desatualizado por mais de uma sessão de trabalho.
 
 ## 📍 Onde paramos
-TASK-009 feita: as respostas de idempotência expiram (24 h) e têm teto por empresa (10000) no JavaScript (`src/repositorio.js`) e no Rust (`rust/one-store/src/memoria.rs`); variáveis `CHATFLOW_IDEMPOTENCIA_HORAS` e `CHATFLOW_IDEMPOTENCIA_MAX`. Carga de 60 s com 5000 conexões: memória do Rust 391 MB antes, 111 MB depois. Contrato HTTP inalterado (34/34 nos dois servidores). `npm test` agora tem 56 testes.TASK-008 feita: o `one-core` roda em WebAssembly (`rust/one-wasm-prova`, `node tests/wasm-prova.js` dá `prova() = 0`, módulo sem importações), `CHATFLOW_FUSO` é lida no Rust, e há teste de carga (`node tests/carga.js`). Resultado e achado de memória em `rust/README.md`.
-TASK-007 (fase 1) feita: a API do ONE existe em Rust em `rust/` (workspace `one-store`, `one-core`, `one-node`), com o mesmo contrato HTTP do JavaScript. Régua de contrato (`CHATFLOW_SERVIDOR`): 34 de 34 contra o JavaScript e 34 de 34 contra o binário Rust (9 testes internos do JS pulados); teste diferencial `tests/diferencial-rust.js`: 109 requisições, 0 diferenças; `cargo fmt`, `clippy -D warnings` e `cargo test` limpos; `npm test` segue 51 de 51. O JavaScript continua sendo o que roda; trocar para o Rust é decisão do João. Como rodar e verificar: `rust/README.md`.
-TASK-005 concluída (commits 2141764 a d1f4e7c): `src/` ficou independente do Node e segue rodando em Node (48 testes verdes). Núcleo `tratar(req, ctx)` em `src/nucleo.js`, adaptador Node em `src/node/`, plataforma injetável (`src/plataforma.js`), repositório assíncrono com operações atômicas nomeadas (`src/repositorio.js`, ver `docs/atomicidade.md`), datas em minutos absolutos sem fuso (`src/tempo.js`) e `src/package.json` com `type: module`. Falta só a camada Cloudflare (D1, R2, adaptador `fetch`): seção "Estado depois da TASK-005" em `docs/portabilidade-worker.md`.
-TASK-001 parte 2 concluída: `docs/plano-tela-01.md` documenta layout desktop/celular, componentes existentes, estados, responsividade, passos de implementação e lacunas da tela Atendimento · Conversas.
-README, tokens, componentes/bundle e os dois prints foram lidos; sete componentes citados foram conferidos. Design system preservado.
-Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, personas, PRD, 3 specs SDD), `_reversa_forward/001-agentes-reservas/` e o domínio MVP em `src/` e a API HTTP em `src/api.js`, com 9 testes passando. Persistência real e deploy seguem indefinidos.
+
+TASK-010 validada no Node 24 com 74 testes verdes em cada modo de banco. O Node usa SQLite com `CHATFLOW_BANCO=sqlite` e `CHATFLOW_BANCO_ARQUIVO` (padrão `chatflow.sqlite`), com idempotência persistente, histórico append-only e desfazer transacional. Memória segue como padrão do servidor.
 
 ## ✅ Pendências ativas
+
 - [ ] Definir com o João o objetivo do projeto (app novo, protótipo ou só o design system) e a stack
 - [ ] Conferir tipografia e espaçamento do design system com o front-end real (valores são leituras visuais dos prints)
 - [ ] Validar o plano da tela 01, os breakpoints propostos e as referências ausentes de conversa preenchida, histórico móvel e apagamentos
 - [ ] Após definir stack e escopo, implementar o estado vazio desktop/celular da tela 01 usando `docs/plano-01-atendimento-conversas.md`
 
-- [ ] Persistência real (banco) no lugar da memória e deploy da API; hoje `src/api.js` roda com dados de demonstração em memória
+- [ ] T05 revisar a TASK-010 e validar a migração em D1 local antes de implementar o adaptador Cloudflare
 - [ ] Trocar o `reservaId` (contador global, vaza o total de reservas entre empresas) por UUID ou id por empresa ao entrar o banco
 - [ ] Combinar com a equipe de integração o contrato final da API e a emissão/rotação dos tokens
 - [ ] Revisar premissas 🟡 de `_reversa_sdd/prd.md` (duração 90 min, métricas, LGPD)
@@ -45,16 +43,15 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - [ ] Vendorizar React (hoje vem do unpkg) para funcionar sem internet no salão
 
 - [ ] Rastreabilidade por pessoa real: hoje o histórico guarda o papel do token (confiável) e o nome digitado no login (`X-Operador`, só um rótulo); para auditoria forte, emitir um token por usuário
-- [ ] Histórico e reservas vivem em memória; o arquivo `CHATFLOW_HISTORICO_ARQUIVO` (JSON por linha, horário em UTC) preserva a trilha, mas ao ir para banco migrar o histórico junto e impedir UPDATE/DELETE na tabela
 
-- [ ] Chaves de API: guardar empresa.chave (hash) no banco, não em memória; em produção NÃO definir CHATFLOW_TOKEN_CHAT (chave global do chat vê todas as empresas); adicionar HTTPS (o limite de requisições já existe, mas em memória por instância)
+- [ ] Configurar HTTPS e chaves de API por empresa no deploy, com o token global de chat desativado
 - [ ] Remover ou renomear ambiente e remover mesa (hoje só criar); decidir o que fazer com reservas já ligadas a uma mesa removida
 
 - [ ] Exclusão de empresa: trocar a senha do administrador por algo forte (a atual tem 6 caracteres; o bloqueio de 5 erros / 15 min mitiga, mas é fraca) e, quando houver contas, trocar a senha única por login real de administrador; avaliar "restaurar empresa excluída" a partir do instantâneo gravado no histórico
 
 - [ ] LGPD: a reserva agora guarda nome e contato do cliente (e o histórico copia esses dados): definir prazo de retenção, base legal e como apagar a pedido do titular antes de usar com clientes reais
 - [ ] Busca no conhecimento é por palavras (sem IA): se o catálogo crescer ou as perguntas fugirem das palavras cadastradas, avaliar busca semântica
-- [ ] Base de conhecimento: documentos e itens ficam em memória (arquivos em base64, até 4 MB cada, 200 itens por empresa); levar para banco/armazenamento de arquivos e extrair o texto de PDF, Word e Excel (hoje só .txt, .md e .csv têm texto lido pela API; os demais só baixam)
+- [ ] Base de conhecimento: separar os arquivos no R2 para o D1 e extrair texto de PDF, Word e Excel
 - [ ] Trocar os `window.confirm` da aba API (gerar nova chave, revogar) por confirmação na própria tela, como já é feito ao excluir item e empresa
 
 - [ ] NicoChat (montado pelo MCP, workspace Unnica Flow 119255, canal ChatFlow `f124625`, pasta ONE `f124625fd5394059`). DESENHO FINAL: toda conversa começa no fluxo `ONE - Conversa (#one)` (`f124625s5116871`): GET `/empresas/{{one_empresa}}/contexto` com Bearer `{{one_chave}}`, resposta inteira (`$`) em `one_ctx` (Long JSON), depois bloco Agente de IA **Nico ONE** (`f124625ag168951`, gpt-5.4-mini). Os campos do agente leem `{{one_ctx :: $.agente.personalidade}}` etc. (testado: o NicoChat renderiza `{{var :: $.caminho}}` de Long JSON). 3 functions de IA (`f124625af261165` search_company_knowledge, `...167` check_table_availability, `...169` book_table) apontam para 3 workflows (`f124625s5116857` buscar, `...859` disponibilidade, `...861` reservar) que chamam a API e terminam em `ai_function_result`. Variáveis do canal: `one_url` (hoje marcador `https://ENDERECO-PUBLICO-DO-ONE`), `one_empresa` (`empresa_1`), `one_chave` (marcador). Variáveis de contato: one_ctx, one_busca, one_disp, one_reserva, one_consulta, one_data, one_horario, one_pessoas, one_mesa, one_ambiente. Palavra-chave `#one` (contains, `f124625s5116871`) criada INATIVA. Nada publicado: tudo em rascunho. FALTA, nesta ordem: (1) ONE com endereço público; (2) gerar a chave da empresa na aba API do ONE; (3) trocar os valores de `one_url` e `one_chave` (variáveis do canal); (4) publicar os 4 fluxos (`channel_sub_flow_publish`); (5) ativar a palavra-chave `#one`; (6) testar. Os 4 "Fluxos de Função" antigos (one_contexto, one_buscar_conhecimento, one_disponibilidade, one_reservar) e `ONE TESTE - leitura de variaveis (temporario)` na pasta ONE estão SUPERADOS e podem ser apagados na tela (o MCP não apaga fluxo). Avisos: o `sandbox_message_send` passa a mensagem de aquecimento pelo fluxo de entrada do canal (UCF - Entrada Atendimento): o teste de 15/11 acionou o agente real do João com um contato de teste (já apagado) e chamou a function save_qualification; para testar de novo, preferir `start_at` em fluxo isolado e checar o `path[]`
@@ -68,9 +65,11 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 
 - [ ] Rust: decidir com o João se o binário Rust passa a ser a API do teste com o NicoChat (hoje só o JavaScript roda). Fase 2 (painel em Rust, WebAssembly com Leptos ou Dioxus) muda o design system e só começa com o OK do João. Depois: adaptador Worker (`workers-rs`), D1/R2 no `one-store`, e desligar o JavaScript. Falta um teste de carga de verdade e de longa duração no binário Rust.
 
-- [ ] Idempotência: validade (24 h) e teto (10000 por empresa) já limitam a memória no JS e no Rust (TASK-009). Ao ir para D1, o `UNIQUE (empresa_id, chave)` precisa de limpeza por data e do mesmo teto. Decidir com o João se 24 h e 10000 servem ao NicoChat (reenvio da mesma chave depois de 24 h passa a ser tratado como pedido novo).
+- [ ] Definir validade e teto de idempotência para o uso do NicoChat e planejar limpeza periódica no D1
 
 ## 🧠 Aprendizados importantes
+
+- SQLite usa uma fila por arquivo no processo Node para evitar bloquear o loop enquanto uma transação assíncrona aguarda a limpeza ou o histórico.
 - Design system foi montado a partir de 9 telas do Hotel Demonstração (Atendimento, Gestão, Operação, A&B) e do PDF de 10/11/2026; nada veio do código-fonte.
 - Paleta: moldura navy, trabalho claro, ciano (`brand-500`) só para ação; fontes Inter (UI), JetBrains Mono (números) e Fraunces (documentos).
 - Tela 01 mostra três painéis no desktop (1440×900) e alternância Conversas/Histórico em painel compacto no celular (360×780).
@@ -119,17 +118,21 @@ Depois, `/reversa-new` expresso gerou `_reversa_sdd/` (brief, ideação, persona
 - Em Windows, o teste de carga lê a memória com `Get-Process`; matar processos por nome (`pkill`, `Stop-Process -Name`) pode derrubar o servidor de outra sessão: mate só o PID que você subiu.
 
 ## 🚫 Armadilhas conhecidas
+
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.
 - Não usar travessão em textos para cliente e prompts de agente (regra do README do design system).
 - TopBar não implementa layout móvel no bundle; ChatFab não encaminha onClick nem fixa posição; EmptyState adiciona tracejado ausente no print.
 
 ## 🔗 Referências rápidas
+
 - Design system: `C:\Claude Code\DESENVOLVIMENTOS\Kendji ONE\ChatFlow-Design-System\` (README.md, tokens.json, components/)
 - Prints: `Prints-telas-ChatFlow-demo\desktop` e `\celular` (9 telas cada)
 - PDF: `Referencia-de-telas-ChatFlow-Unnica.pdf`
 - Plano tela 01: `docs/plano-01-atendimento-conversas.md` (versão completa com PDF e dados necessários; `docs/plano-tela-01.md` é a primeira versão)
 
 ## 📚 Histórico recente
+
+- 2026-11-21 — TASK-010: docs de persistência (D1, R2, LGPD, id de reserva), limpeza de idempotência em SQL com testes e revisão do esquema e do repositório SQLite do T04
 - 2026-11-15 — TASK-009: idempotência com validade e teto (JS e Rust), 5 testes novos no JS e 6 no Rust; memória sob carga estabilizada
 - 2026-11-15 — TASK-008: one-core em wasm32 (prova executada no Node), CHATFLOW_FUSO no Rust, teste de carga (60 s, 5000 conexões, 0 erros) e achado de crescimento de memória por idempotência
 - 2026-11-15 — TASK-007 fase 1: API do ONE em Rust (workspace `rust/`), régua de contrato HTTP independente da implementação, 34/34 JS e Rust, 109 requisições sem diferença

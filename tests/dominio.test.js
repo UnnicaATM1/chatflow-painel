@@ -7,8 +7,14 @@ const { lerConfig, atualizar } = require('../src/agentes');
 const { reservar } = require('../src/reservas');
 const { mapa } = require('../src/mapa');
 
+const criarRepositorioSqlite = process.env.CHATFLOW_BANCO === 'sqlite'
+  ? require('../src/sqlite/repositorio').criarRepositorioSqlite : null;
+const repositorios = [];
+test.after(() => Promise.all(repositorios.map((store) => store.fechar())));
+
 async function setup() {
-  const s = criarStore();
+  const s = criarRepositorioSqlite ? criarRepositorioSqlite() : criarStore();
+  if (criarRepositorioSqlite) repositorios.push(s);
   const amb = () => [
     { nome: 'salao', mesas: [{ id: 'S1', capacidade: 4, reservavel: true }] },
     { nome: 'externa', mesas: [{ id: 'E1', capacidade: 4, reservavel: true }] },

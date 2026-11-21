@@ -2,8 +2,19 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { criarStore, addEmpresa } = require('../src/store');
+const { criarStore: criarStoreMemoria, addEmpresa } = require('../src/store');
 const { criarServidor } = require('../src/api');
+
+const usarSqlite = process.env.CHATFLOW_BANCO === 'sqlite';
+const criarRepositorioSqlite = usarSqlite ? require('../src/sqlite/repositorio').criarRepositorioSqlite : null;
+const repositorios = [];
+function criarStore(opcoes) {
+  if (!usarSqlite) return criarStoreMemoria(opcoes);
+  const store = criarRepositorioSqlite(opcoes);
+  repositorios.push(store);
+  return store;
+}
+test.after(() => Promise.all(repositorios.map((store) => store.fechar())));
 
 const T = { chat: 'tc', cliente: 'tcl', integracao: 'ti' };
 
@@ -30,7 +41,10 @@ async function lancar(env) {
   const net = require('node:net');
   const porta = await new Promise((r) => { const l = net.createServer().listen(0, () => { const p = l.address().port; l.close(() => r(p)); }); });
   const cmd = EXTERNO || [process.execPath, require('node:path').join(__dirname, '..', 'src', 'server.js')];
-  const base = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, PORT: String(porta) };
+  const base = {
+    PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, PORT: String(porta),
+    CHATFLOW_BANCO: usarSqlite ? 'sqlite' : 'memoria', CHATFLOW_BANCO_ARQUIVO: ':memory:',
+  };
   const filho = spawn(cmd[0], cmd.slice(1), { env: { ...base, ...env }, stdio: ['ignore', 'ignore', 'inherit'], shell: false });
   FILHOS.add(filho);
   let saiu = false;

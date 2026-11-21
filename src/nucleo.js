@@ -66,6 +66,7 @@ async function mudarReserva(store, lid, rid, operacao, ator, extra) {
 }
 
 async function desfazer(store, lid, seq, ator) {
+  if (store.transacao) return store.transacao((tx) => desfazer(tx, lid, seq, ator));
   await empresa(store, lid);
   const ev = await store.historicoObter(lid, seq);
   if (!ev || ev.entidade !== 'reserva') throw Object.assign(new Error('evento não desfazível'), { codigo: 404 });

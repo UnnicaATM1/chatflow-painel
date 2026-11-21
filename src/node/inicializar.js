@@ -1,31 +1,42 @@
 'use strict';
 
 // Uso: CHATFLOW_DEMO=1 CHATFLOW_TOKEN_CHAT=... CHATFLOW_TOKEN_CLIENTE=... CHATFLOW_TOKEN_INTEGRACAO=... node src/server.js
-// Dados de demonstração em memória (as 3 empresas); persistência real fica para a próxima feature.
 import { criarStore, addEmpresa } from '../store.js';
 import { criarServidor } from './servidor.js';
 import fs from 'node:fs';
 import { plataformaNode } from './plataforma.js';
 
-// CHATFLOW_HISTORICO_ARQUIVO: grava cada evento de histórico (JSON por linha) neste arquivo, além da memória.
+// CHATFLOW_HISTORICO_ARQUIVO: grava uma cópia de cada evento em JSON por linha.
 const arquivoHistorico = process.env.CHATFLOW_HISTORICO_ARQUIVO || null;
 const sink = arquivoHistorico ? (e) => {
   try { fs.appendFileSync(arquivoHistorico, JSON.stringify(e) + '\n', 'utf8'); }
   catch (err) { console.error('falha ao gravar histórico em arquivo:', err.message); }
 } : null;
 // CHATFLOW_IDEMPOTENCIA_HORAS (padrão 24) e CHATFLOW_IDEMPOTENCIA_MAX (padrão 10000 por empresa): validade e teto das
-// respostas de idempotência guardadas em memória.
-const store = criarStore({
+// respostas de idempotência.
+const opcoesStore = {
   plat: plataformaNode(),
   sink,
   idempotenciaTtlMs: Number(process.env.CHATFLOW_IDEMPOTENCIA_HORAS) * 3600 * 1000 || undefined,
   idempotenciaMax: Number(process.env.CHATFLOW_IDEMPOTENCIA_MAX) || undefined,
-});
-// As 3 empresas de demonstração só existem com CHATFLOW_DEMO=1. Em produção o servidor começa vazio.
+};
+const banco = process.env.CHATFLOW_BANCO || 'memoria';
+if (banco !== 'memoria' && banco !== 'sqlite') throw new Error('CHATFLOW_BANCO deve ser memoria ou sqlite');
+let store;
+if (banco === 'sqlite') {
+  const { criarRepositorioSqlite } = await import('../sqlite/repositorio.js');
+  store = criarRepositorioSqlite({ ...opcoesStore, caminho: process.env.CHATFLOW_BANCO_ARQUIVO || 'chatflow.sqlite' });
+} else {
+  store = criarStore(opcoesStore);
+}
+
+// Só semeia a demonstração quando habilitada, preservando empresas existentes ou já excluídas.
 const demo = process.env.CHATFLOW_DEMO === '1';
 for (const n of demo ? [1, 2, 3] : []) {
-  addEmpresa(store, {
-    id: `empresa_${n}`,
+  const id = `empresa_${n}`;
+  if (await store.empresaObter(id) || (await store.historicoListar(id, { entidade: 'empresa', limite: 1 })).length) continue;
+  await addEmpresa(store, {
+    id,
     nome: `Empresa ${n}`,
     ambientes: [
       { nome: 'salao', mesas: [{ id: `S1`, capacidade: 4, reservavel: true }, { id: `S2`, capacidade: 6, reservavel: true }] },
