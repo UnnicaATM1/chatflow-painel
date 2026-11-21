@@ -6,6 +6,7 @@ COPY --chown=node:node package.json ./
 COPY --chown=node:node src/ ./src/
 COPY --chown=node:node web/ ./web/
 COPY --chown=node:node db/ ./db/
+COPY --chown=node:node scripts/backup-sqlite.js scripts/restaurar-sqlite.js scripts/sqlite-util.js ./scripts/
 
 USER node
 EXPOSE 3000

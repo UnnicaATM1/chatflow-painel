@@ -8,6 +8,10 @@
 !db/
 !db/migrations/
 !db/migrations/**
+!scripts/
+!scripts/backup-sqlite.js
+!scripts/restaurar-sqlite.js
+!scripts/sqlite-util.js
 **/.env*
 **/node_modules
 **/*.sqlite*
