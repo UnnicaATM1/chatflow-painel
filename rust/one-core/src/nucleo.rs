@@ -260,6 +260,13 @@ fn ip_de(cfg: &Config, req: &Req) -> String {
     }
 }
 
+/// Código de reserva válido: 8 caracteres do alfabeto sem 0, O, 1, I e L (igual a `codigoReservaValido` do JavaScript).
+fn codigo_reserva_valido(c: &str) -> bool {
+    c.len() == 8
+        && c.bytes()
+            .all(|b| one_store::plataforma::ALFABETO_CODIGO.contains(&b))
+}
+
 fn dec(s: &str) -> Res<String> {
     decodificar_uri(s).ok_or_else(|| err(400, "URI malformed"))
 }
@@ -806,13 +813,13 @@ async fn rotear<R: Repositorio>(
     {
         so_staff(staff)?;
         let lid = dec(p(1).unwrap_or(""))?;
-        let rid = p(3).filter(|x| !x.is_empty()).map(str::to_string);
+        let rid = dec(p(3).unwrap_or(""))?;
         if !modulo_ligado(repo, &lid, "reservas").await {
             return erro(404, "recurso \"reservas\" não habilitado para esta empresa");
         }
-        let Some(rid) = rid else {
+        if !codigo_reserva_valido(&rid) {
             return erro(404, "reserva inexistente");
-        };
+        }
         let op = if m == "DELETE" {
             Op::Cancelar
         } else {
@@ -1103,7 +1110,10 @@ async fn rotear<R: Repositorio>(
                 "data (AAAA-MM-DD), horario (HH:MM) e pessoas obrigatórios",
             );
         }
-        let ign = q("ignorar").filter(|x| !x.is_empty());
+        let ign = q("ignorar");
+        if ign.is_some_and(|x| !codigo_reserva_valido(x)) {
+            return erro(400, "código de reserva inválido em ignorar");
+        }
         return passa(
             cors,
             200,

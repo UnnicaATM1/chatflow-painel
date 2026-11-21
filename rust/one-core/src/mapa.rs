@@ -27,7 +27,6 @@ pub async fn mapa<R: Repositorio>(
                     let r = confirmadas.iter().find(|x| x.mesa_id == m.id && i < x.fim && i + DURACAO_MIN > x.inicio);
                     let reserva = r.map_or(Json::Null, |r| {
                         let mut o = Map::new();
-                        o.insert("reservaId".into(), r.id.clone().into());
                         o.insert("horario".into(), r.horario.clone().into());
                         o.insert("pessoas".into(), r.pessoas.into());
                         o.insert("status".into(), r.status.clone().into());
