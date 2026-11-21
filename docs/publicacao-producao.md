@@ -37,3 +37,20 @@ O backup automatizado cobre o **banco**, enquanto os bytes dos anexos ficam na p
 Restaure primeiro em um ambiente isolado. Com o serviço parado e o destino identificado por `CHATFLOW_BANCO_ARQUIVO`, use `node scripts/restaurar-sqlite.js "<pasta-da-copia>"`. O script valida a cópia, rejeita o banco em uso e guarda o arquivo anterior como `.antes-restauracao`. Preserve também a pasta atual de anexos e coloque a pasta correspondente ao ponto restaurado ao lado do banco. Confirme integridade, empresas, reservas e abertura de um anexo antes de liberar tráfego. Use `node --test tests/backup-sqlite.test.js` para exercitar os scripts em banco temporário.
 
 O verificador local usa HTTP apenas em loopback com credenciais aleatórias efêmeras. A validação de TLS, redirecionamento, proxy, volume e recuperação no ambiente definitivo depende da futura publicação.
+
+## Contêiner e hospedagem
+
+Após o fechamento de **TASK-010 e TASK-012**, use o [Dockerfile](../Dockerfile) como opção de empacotamento. A imagem roda Node 24 como usuário `node` e verifica `/saude` com o próprio Node. O contêiner atende HTTP na porta interna configurada por `PORT` ou na 3000. O proxy do provedor termina o TLS. Antes de iniciar, confirme no ambiente que o volume montado permite escrita ao usuário `node`. Um volume pode substituir as permissões do diretório criado na imagem.
+
+O exemplo define um serviço Docker com uma instância, disco de 1 GiB em `/var/data`, verificação em `/saude` e deploy automático desativado. O Blueprint fixa `CHATFLOW_BANCO=sqlite` e `CHATFLOW_BANCO_ARQUIVO=/var/data/chatflow.sqlite`. As demais variáveis aparecem só pelo nome com `sync: false`. Preencha esses valores no Render e revise o plano e o tamanho do volume antes de aplicar o exemplo. [Exemplo de Blueprint](../render.yaml) · [Referência do Render](https://render.com/docs/blueprint-spec) · [Discos persistentes](https://render.com/docs/disks).
+
+- **Railway**. Use o Dockerfile, configure uma réplica, anexe um volume em `/var/data` e configure `/saude` como healthcheck. Preencha as variáveis no serviço e valide HTTPS e o encaminhamento do IP no domínio usado. [Volumes no Railway](https://docs.railway.com/volumes).
+- **Fly.io**. Use o Dockerfile com uma Machine e um volume na mesma região. Monte o volume em `/var/data`, alinhe `internal_port` com `PORT`, configure o healthcheck HTTP em `/saude` e habilite `force_https`. Preencha a configuração e os segredos na plataforma. [Configuração do Fly.io](https://fly.io/docs/reference/configuration/).
+
+O contêiner da aplicação inclui o código necessário para servir o app. Execute os scripts de backup e restauração separadamente, a partir de um checkout operacional da versão aprovada com acesso aos mesmos caminhos do volume. Planeje esse acesso com o provedor escolhido e valide a restauração em ambiente isolado.
+
+## Painel no Sites
+
+O painel em `/sites` depende de uma API publicada em HTTPS. Depois de validar a API, configure `CHATFLOW_CORS_ORIGENS` com a origem HTTPS exata do painel publicado, sem caminho nem barra final, por exemplo `https://painel.exemplo.com`. Confirme que a API envia o cabeçalho CORS para essa origem e omite o cabeçalho para uma origem diferente.
+
+O T00 ajusta `window.CHATFLOW_CONFIG.apiBase` em `web/config.js` quando a URL da API estiver disponível. Use a origem HTTPS da API sem barra final, como `https://api.exemplo.com`. A configuração fica no arquivo público do painel e deve conter apenas o endereço. Depois de publicar os assets, confirme login e leitura da lista de empresas a partir do painel hospedado.

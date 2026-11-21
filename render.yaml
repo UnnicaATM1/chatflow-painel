@@ -1,0 +1,29 @@
+# Exemplo para aplicar somente após o fechamento de TASK-010 e TASK-012.
+services:
+  - type: web
+    name: chatflow-painel
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    numInstances: 1
+    autoDeployTrigger: "off"
+    healthCheckPath: /saude
+    disk:
+      name: chatflow-dados
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: CHATFLOW_BANCO
+        value: sqlite
+      - key: CHATFLOW_BANCO_ARQUIVO
+        value: /var/data/chatflow.sqlite
+      - key: CHATFLOW_TOKEN_CLIENTE
+        sync: false
+      - key: CHATFLOW_TOKEN_INTEGRACAO
+        sync: false
+      - key: CHATFLOW_ADMIN_SENHA
+        sync: false
+      - key: CHATFLOW_CORS_ORIGENS
+        sync: false
+      - key: CHATFLOW_CONFIAR_PROXY
+        sync: false
