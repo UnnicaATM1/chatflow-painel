@@ -8,6 +8,6 @@
     "test": "node --test --test-force-exit \"tests/*.test.js\""
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0 <23 || >=23.4.0"
   }
 }

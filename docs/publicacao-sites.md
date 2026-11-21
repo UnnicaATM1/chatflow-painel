@@ -40,7 +40,7 @@ Antes de publicar qualquer coisa, confirme com o João: qual hospedagem Node, co
 
 Aceite da parte B: `https://<api>/saude` 200; `GET /empresas` sem chave 401 e com `demo-integracao` 401; com a nova chave de integração devolve `[]`; CORS aceita só o endereço do painel.
 
-Limitação a informar ao João: empresas, reservas, conhecimento e chaves das empresas ficam em memória e somem quando o processo reinicia (só o histórico pode ir para arquivo). Serve para o teste com o NicoChat; produção real exige banco ou armazenamento (ver TASK-004).
+O servidor Node ainda usa memória por padrão. Para preservar empresas, reservas, conhecimento, chaves e histórico ao reiniciar, configure `CHATFLOW_BANCO=sqlite` e `CHATFLOW_BANCO_ARQUIVO` em volume persistente. Mantenha no mesmo volume a pasta de anexos ao lado do banco. Os pré-requisitos, backup e restauração estão no [roteiro de produção](publicacao-producao.md).
 
 ## Parte C: painel estático (T00)
 
