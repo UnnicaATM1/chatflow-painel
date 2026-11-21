@@ -79,9 +79,9 @@ function lerArquivo(store, a) {
   return { arquivo: { nome, mime: regra.mime, tamanho: buffer.length, base64: a.base64 }, texto: extraido };
 }
 
-async function achar(store, empresaId, id) {
+async function achar(store, empresaId, id, { incluirArquivo = true } = {}) {
   await empresa(store, empresaId);
-  const item = await store.conhecimentoObter(empresaId, id);
+  const item = await store.conhecimentoObter(empresaId, id, { incluirArquivo });
   if (!item) throw erro('item de conhecimento inexistente', 404);
   return { item };
 }
@@ -108,11 +108,11 @@ function resumo(item) {
 
 async function listarPublico(store, empresaId) {
   await empresa(store, empresaId);
-  return (await store.conhecimentoListar(empresaId)).map((i) => publica(empresaId, i));
+  return (await store.conhecimentoListar(empresaId, { incluirArquivo: false })).map((i) => publica(empresaId, i));
 }
 
 async function obter(store, empresaId, id) {
-  const { item } = await achar(store, empresaId, id);
+  const { item } = await achar(store, empresaId, id, { incluirArquivo: false });
   return publica(empresaId, item);
 }
 
@@ -120,7 +120,7 @@ async function criar(store, empresaId, dados) {
   await empresa(store, empresaId);
   if (!dados || typeof dados !== 'object') throw erro('corpo inválido', 400);
   const limite = () => erro(`limite de ${LIM.itens} itens de conhecimento por empresa`, 400);
-  if ((await store.conhecimentoListar(empresaId)).length >= LIM.itens) throw limite();
+  if ((await store.conhecimentoListar(empresaId, { incluirArquivo: false })).length >= LIM.itens) throw limite();
   if (!TIPOS.includes(dados.tipo)) throw erro(`tipo deve ser um de: ${TIPOS.join(', ')}`, 400);
   const agora = new Date(store.plat.agora()).toISOString();
   const item = { titulo: texto(dados.titulo, 'título', LIM.titulo, true).trim(), tipo: dados.tipo, criadoEm: agora, atualizadoEm: agora };
@@ -137,7 +137,7 @@ async function criar(store, empresaId, dados) {
 }
 
 async function editar(store, empresaId, id, dados) {
-  const { item } = await achar(store, empresaId, id);
+  const { item } = await achar(store, empresaId, id, { incluirArquivo: false });
   if (!dados || typeof dados !== 'object') throw erro('corpo inválido', 400);
   if (dados.tipo !== undefined && dados.tipo !== item.tipo) throw erro('o tipo do item não pode ser alterado', 400);
   const novo = {};
@@ -155,7 +155,7 @@ async function editar(store, empresaId, id, dados) {
 }
 
 async function excluir(store, empresaId, id) {
-  await achar(store, empresaId, id);
+  await achar(store, empresaId, id, { incluirArquivo: false });
   return store.conhecimentoExcluir(empresaId, id);
 }
 
@@ -177,7 +177,7 @@ const acertos = (texto, ts) => { const n = norm(texto); return ts.filter((t) => 
 
 async function buscar(store, empresaId, consulta, limite = 5) {
   await empresa(store, empresaId);
-  const itens = await store.conhecimentoListar(empresaId);
+  const itens = await store.conhecimentoListar(empresaId, { incluirArquivo: false });
   const q = typeof consulta === 'string' ? consulta.trim() : '';
   if (!q) throw erro('informe o assunto da busca em q', 400);
   if ([...q].length > 200) throw erro('a busca passa do limite de 200 caracteres', 400);

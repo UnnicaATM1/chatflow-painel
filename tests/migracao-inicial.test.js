@@ -45,7 +45,7 @@ test('histórico: seq sem buraco e o mesmo evento não é desfeito duas vezes', 
 
 test('excluir a empresa leva reservas e conhecimento, mas o histórico fica', () => {
   const db = banco();
-  db.exec("INSERT INTO reservas (empresa_id, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status) VALUES ('e1', 'S1', 'salao', '2026-11-20', '20:00', 2, 1, 91, 'confirmada')");
+  db.exec("INSERT INTO reservas (id, codigo, empresa_id, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status) VALUES ('00000000-0000-4000-8000-000000000000', '22222222', 'e1', 'S1', 'salao', '2026-11-20', '20:00', 2, 1, 91, 'confirmada')");
   db.exec("INSERT INTO conhecimento (empresa_id, id, item) VALUES ('e1', 1, '{}')");
   evento(db);
   db.exec("DELETE FROM empresas WHERE id = 'e1'");
@@ -55,6 +55,8 @@ test('excluir a empresa leva reservas e conhecimento, mas o histórico fica', ()
 
 test('chaves estrangeiras e CHECK de status valem', () => {
   const db = banco();
-  assert.throws(() => db.exec("INSERT INTO reservas (empresa_id, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status) VALUES ('nao', 'S1', 'a', 'd', 'h', 1, 1, 2, 'confirmada')"), /FOREIGN KEY/);
-  assert.throws(() => db.exec("INSERT INTO reservas (empresa_id, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status) VALUES ('e1', 'S1', 'a', 'd', 'h', 1, 1, 2, 'x')"), /CHECK/);
+  const inserir = db.prepare(`INSERT INTO reservas (id, codigo, empresa_id, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status)
+    VALUES ('00000000-0000-4000-8000-000000000000', '22222222', ?, 'S1', 'a', 'd', 'h', 1, 1, 2, ?)`);
+  assert.throws(() => inserir.run('nao', 'confirmada'), /FOREIGN KEY/);
+  assert.throws(() => inserir.run('e1', 'x'), /CHECK/);
 });

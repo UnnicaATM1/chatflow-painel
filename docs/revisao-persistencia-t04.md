@@ -56,3 +56,20 @@ TASK-010, revisão feita em 2026-11-21 sobre `db/migrations/0001_inicial.sql` e 
 - **Esquema: aprovado com ressalvas.** Tratar os achados 1 a 3 antes de portar para o D1; 4 a 6 junto com o repositório D1.
 - **Repositório local (`node:sqlite`): aprovado como implementação local**, com **R1 a corrigir já** (custo por requisição cresce com o conhecimento) e R2 a corrigir antes da segunda migração. Paridade de interface e ausência de `UPDATE/DELETE` no histórico: confirmadas.
 - **Atomicidade para o D1: não atendida e não era o escopo** deste arquivo; fica para `src/d1/repositorio.js` seguindo `persistencia.md`.
+
+## 5. Revisão final (2026-11-21, depois das correções do T04)
+
+Reaplicadas as sondas sobre o `0001_inicial.sql` final (SQLite 3.53), e a migração aplicada duas vezes sem erro.
+
+| Achado | Status | Medição |
+|---|---|---|
+| 1 Reservas sobrepostas | **Corrigido** | INSERT sobreposto, reativação sobreposta e edição de horário sobreposta abortam com `sobreposicao de reservas`; adjacente (190 após 100–190), outra mesa, reserva cancelada sobreposta e editar a própria reserva passam. |
+| 3 `idempotencia` sem FK | **Corrigido** | Linha de empresa inexistente: `FOREIGN KEY constraint failed`; apagar a empresa leva suas chaves (0 linhas restantes). |
+| 4 `empresas.chave` sem índice | **Corrigido** | Coluna gerada `chave_hash`; `EXPLAIN QUERY PLAN`: `SEARCH empresas USING INDEX empresas_por_chave_hash (chave_hash=?)`. |
+| 5 Nome da empresa sem unicidade | **Corrigido** | `b` depois de `B` recusado (`UNIQUE ... empresas.nome`); dois nomes com o mesmo `nome_normalizado` recusados. Ressalva: `COLLATE NOCASE` só dobra ASCII, o resto depende do `nome_normalizado` que o repositório preenche; inserção SQL direta com acento e `nome_normalizado` NULL passaria (NULLs não colidem em `UNIQUE`). Aceitável, pois só o repositório escreve. |
+| 6 Ordem do histórico | **Corrigido** | Memória e SQLite devolvem as mesmas chaves, na mesma ordem, tanto no `historicoAcrescentar` quanto no `historicoListar`: `seq, boot, quando, empresaId, entidade, entidadeId, acao, papel, depois`. |
+| 10 `tentativas_admin` sem linha | **Corrigido** | Sem linha: `{ n: 0, ate: 0 }`; depois de gravar: `{ n: 2, ate: 5 }`, idêntico à memória. |
+
+Não verificados por falta de ferramenta: achado 11 (`wrangler d1 migrations apply` com os gatilhos, agora com dois gatilhos a mais) segue pendente. Achados 2, 7, 8, 9 e 12 permanecem como documentados; R1 a R8 do repositório não foram reavaliados nesta etapa.
+
+Testes: `npm test` com `CHATFLOW_BANCO=memoria` e com `CHATFLOW_BANCO=sqlite`: 80 de 80 em cada.

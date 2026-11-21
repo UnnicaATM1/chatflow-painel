@@ -30,11 +30,18 @@ if (banco === 'sqlite') {
   store = criarStore(opcoesStore);
 }
 
+// CHATFLOW_SEMENTE_ARQUIVO: empresas iniciais de teste, com reservas legadas opcionais.
+if (process.env.CHATFLOW_SEMENTE_ARQUIVO) {
+  for (const e of JSON.parse(fs.readFileSync(process.env.CHATFLOW_SEMENTE_ARQUIVO, 'utf8'))) {
+    if (!(await store.empresaObter(e.id, { incluirConhecimento: false }))) await addEmpresa(store, e);
+  }
+}
+
 // Só semeia a demonstração quando habilitada, preservando empresas existentes ou já excluídas.
 const demo = process.env.CHATFLOW_DEMO === '1';
 for (const n of demo ? [1, 2, 3] : []) {
   const id = `empresa_${n}`;
-  if (await store.empresaObter(id) || (await store.historicoListar(id, { entidade: 'empresa', limite: 1 })).length) continue;
+  if (await store.empresaObter(id, { incluirConhecimento: false }) || (await store.historicoListar(id, { entidade: 'empresa', limite: 1 })).length) continue;
   await addEmpresa(store, {
     id,
     nome: `Empresa ${n}`,
@@ -47,11 +54,6 @@ for (const n of demo ? [1, 2, 3] : []) {
       editavelPor: Object.fromEntries(['nome', 'descricao', 'personalidade', 'habilidades', 'produtos', 'restricoes'].map((c) => [c, ['cliente', 'integracao']])),
     },
   });
-}
-
-// CHATFLOW_SEMENTE_ARQUIVO (só para testes de contrato): JSON com a lista de empresas iniciais (mesmos campos de addEmpresa).
-if (process.env.CHATFLOW_SEMENTE_ARQUIVO) {
-  for (const e of JSON.parse(fs.readFileSync(process.env.CHATFLOW_SEMENTE_ARQUIVO, 'utf8'))) await addEmpresa(store, e);
 }
 
 // CHATFLOW_TOKEN_CHAT é opcional e legado: uma chave global do chat vê TODAS as empresas. Prefira a chave de API de cada empresa.

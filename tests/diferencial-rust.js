@@ -34,6 +34,8 @@ const roteiro = [
   ['GET', '/empresas/empresa_1/disponibilidade?data=2026-11-20&horario=20:00&pessoas=2', { t: T.chat }],
   ['GET', '/empresas/empresa_1/disponibilidade?data=2026-11-20&horario=20:00&pessoas=2.0', { t: T.chat }],
   ['GET', '/empresas/empresa_1/disponibilidade?data=2026-11-20&horario=20:00&pessoas=0', { t: T.chat }],
+  ['GET', '/empresas/empresa_1/disponibilidade?data=2026-11-20&horario=20:00&pessoas=2&ignorar=', { t: T.chat }], ['GET', '/empresas/empresa_1/disponibilidade?data=2026-11-20&horario=20:00&pessoas=2&ignorar=1', { t: T.chat }],
+  ['DELETE', '/empresas/empresa_1/reservas/', { t: T.cl }], ['DELETE', '/empresas/empresa_1/reservas/%E0', { t: T.cl }], ['DELETE', '/empresas/empresa_1/reservas/22222222', { t: T.cl }],
   ['GET', '/empresas/empresa_1/disponibilidade?data=2026-02-30&horario=20:00&pessoas=2', { t: T.chat }],
   ['POST', '/empresas/empresa_1/reservas', { t: T.chat, b: { data: '2026-11-20', horario: '20:00', pessoas: 2, ambiente: 'salao', nomeCliente: ' Ana ', contato: '+55 11 9' }, h: { 'idempotency-key': 'a1' } }],
   ['POST', '/empresas/empresa_1/reservas', { t: T.chat, b: { data: '2026-11-20', horario: '20:00', pessoas: 2, ambiente: 'salao' }, h: { 'idempotency-key': 'a1' } }],

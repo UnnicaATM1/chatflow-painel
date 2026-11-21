@@ -21,6 +21,30 @@ export function validarPlataforma(p) {
 
 const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 
+const ALFABETO_RESERVA = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+const FORMATO_RESERVA = new RegExp(`^[${ALFABETO_RESERVA}]{8}$`);
+
+export function codigoReservaValido(codigo) {
+  return typeof codigo === 'string' && codigo.length === 8 && FORMATO_RESERVA.test(codigo);
+}
+
+export function gerarCodigoReserva(plat, emUso) {
+  const limite = 256 - 256 % ALFABETO_RESERVA.length;
+  let codigo = '';
+  for (let i = 0; i < 128; i++) {
+    const base64 = plat.aleatorio(8).replace(/-/g, '+').replace(/_/g, '/');
+    for (const byte of plat.base64Decodificar(base64)) {
+      if (byte >= limite) continue; // amostragem sem viés
+      codigo += ALFABETO_RESERVA[byte % ALFABETO_RESERVA.length];
+      if (codigo.length === 8) {
+        if (!emUso(codigo)) return codigo;
+        codigo = '';
+      }
+    }
+  }
+  throw new Error('não foi possível gerar um código de reserva único');
+}
+
 // Comparação em tempo constante sobre os caracteres (strings de mesmo tamanho; tamanhos diferentes dão false).
 export function iguaisTempoConstante(a, b) {
   const x = String(a), y = String(b);

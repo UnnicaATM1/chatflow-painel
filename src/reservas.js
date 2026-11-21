@@ -3,6 +3,17 @@ import { minutosAbsolutos } from './tempo.js';
 
 export const DURACAO_MIN = 90;
 
+// A semente pode vir de uma exportação com IDs numéricos. Só carrega os dados da
+// reserva: UUID e código são emitidos pelo repositório que recebe a semente.
+export function prepararReservaSemeada({ mesaId, ambiente, data, horario, pessoas, status, nomeCliente, contato }, ambientes) {
+  const alvo = ambientes.find((a) => (!ambiente || a.nome === ambiente) && a.mesas.some((mesa) => mesa.id === mesaId));
+  if (!alvo || !Number.isInteger(pessoas) || pessoas < 1) throw new Error('reserva inválida na semente');
+  if (status !== undefined && status !== 'confirmada' && status !== 'cancelada') throw new Error('status inválido na semente de reservas');
+  const inicio = minutosAbsolutos(data, horario);
+  return { mesaId, ambiente: alvo.nome, data, horario, pessoas, inicio, fim: inicio + DURACAO_MIN,
+    ...validarCliente({ nomeCliente, contato }), status: status ?? 'confirmada' };
+}
+
 function inicio(data, horario) {
   return minutosAbsolutos(data, horario);
 }

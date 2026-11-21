@@ -228,9 +228,13 @@ test('reservaId é um código curto aleatório: formato, idempotência, históri
   assert.deepStrictEqual(lista.map((r) => r.id).sort(), [a.reservaId, b.reservaId].sort());
   assert.ok(lista.every((r) => CODIGO_RESERVA.test(r.id) && r.uuid === undefined));
   const mapa = await (await f('/empresas/empresa_1/mapa?data=2026-11-20&horario=20:00', { token: T.cliente })).json();
-  assert.strictEqual(mapa[0].mesas[0].reserva.reservaId, a.reservaId);
-  const disponivel = await (await f(`/empresas/empresa_1/disponibilidade?data=2026-11-20&horario=20:00&pessoas=2&ignorar=${a.reservaId}`, { token: T.cliente })).json();
+  assert.deepStrictEqual(mapa[0].mesas[0].reserva, { horario: '20:00', pessoas: 2, status: 'confirmada' });
+  const rotaDisponibilidade = '/empresas/empresa_1/disponibilidade?data=2026-11-20&horario=20:00&pessoas=2';
+  const disponivel = await (await f(`${rotaDisponibilidade}&ignorar=${a.reservaId}`, { token: T.cliente })).json();
   assert.deepStrictEqual(disponivel.ambientes[0].mesas.map((m) => m.id), ['S1']);
+  for (const invalido of ['', '123', 'OOOOOOOO']) {
+    assert.strictEqual((await f(`${rotaDisponibilidade}&ignorar=${invalido}`, { token: T.cliente })).status, 400);
+  }
   const hist = await (await f('/empresas/empresa_1/historico?entidade=reserva', { token: T.cliente })).json();
   assert.ok(hist.length >= 2 && hist.every((e) => [a.reservaId, b.reservaId].includes(e.entidadeId)));
   const cancel = await f(`/empresas/empresa_1/reservas/${a.reservaId}`, { token: T.cliente, method: 'DELETE' });
@@ -982,8 +986,10 @@ async function bateria(chamar) {
   const res = { data: '2026-11-20', horario: '23:30', pessoas: 2, ambiente: 'salao' };
   const a = await chamar('POST', `/empresas/${id}/reservas`, { ...TOK, corpo: res, headers: { 'idempotency-key': 'k1' } });
   const b = await chamar('POST', `/empresas/${id}/reservas`, { ...TOK, corpo: res, headers: { 'idempotency-key': 'k1' } });
-  reg('reserva criada', a, a.corpo);
-  reg('reserva repetida (idempotente)', b, b.corpo);
+  assert.match(a.corpo.reservaId, CODIGO_RESERVA);
+  assert.deepStrictEqual(b.corpo, a.corpo);
+  reg('reserva criada', a, { ...a.corpo, reservaId: '<codigo>' });
+  reg('reserva repetida (idempotente)', b, { ...b.corpo, reservaId: '<codigo>' });
   const c = await chamar('POST', `/empresas/${id}/reservas`, { ...TOK, corpo: { ...res, data: '2026-11-21', horario: '00:30' }, headers: { 'idempotency-key': 'k2' } });
   reg('cruza a meia-noite: indisponível', c, c.corpo.status);
   reg('reserva sem chave', await chamar('POST', `/empresas/${id}/reservas`, { ...TOK, corpo: res }));
@@ -1181,6 +1187,7 @@ function plataformaRelogio(relogio) {
 test('idempotência: a resposta expirada some e a chave é esquecida', INTERNO, async () => {
   const relogio = { t: 1_000_000 };
   const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 60_000 });
+  await addEmpresa(s, { id: 'e1', nome: 'Empresa 1', ambientes: [], agente: {} });
   await s.idempotenciaGravar('e1', 'k1', { status: 'indisponivel', n: 1 });
   relogio.t += 59_999;
   assert.deepStrictEqual(await s.idempotenciaObter('e1', 'k1'), { status: 'indisponivel', n: 1 }, 'ainda vale 1 ms antes de vencer');
@@ -1192,6 +1199,7 @@ test('idempotência: a resposta expirada some e a chave é esquecida', INTERNO, 
 test('idempotência: gravar varre o que já venceu, sem esperar alguém consultar', INTERNO, async () => {
   const relogio = { t: 5_000_000 };
   const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 1000 });
+  await addEmpresa(s, { id: 'e1', nome: 'Empresa 1', ambientes: [], agente: {} });
   for (let i = 0; i < 50; i++) await s.idempotenciaGravar('e1', `k${i}`, { i });
   relogio.t += 1000;
   await s.idempotenciaGravar('e1', 'nova', { i: 'nova' });
@@ -1201,6 +1209,8 @@ test('idempotência: gravar varre o que já venceu, sem esperar alguém consulta
 test('idempotência: o teto por empresa é respeitado e as mais antigas saem primeiro', INTERNO, async () => {
   const relogio = { t: 1 };
   const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaMax: 3 });
+  await addEmpresa(s, { id: 'e1', nome: 'Empresa 1', ambientes: [], agente: {} });
+  await addEmpresa(s, { id: 'e2', nome: 'Empresa 2', ambientes: [], agente: {} });
   for (let i = 1; i <= 5; i++) { relogio.t += 10; await s.idempotenciaGravar('e1', `k${i}`, { i }); }
   await s.idempotenciaGravar('e2', 'x', { x: 1 });
   assert.strictEqual(await s.idempotenciaTamanho('e1'), 3);

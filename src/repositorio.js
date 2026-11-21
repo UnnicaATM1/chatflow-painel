@@ -6,7 +6,8 @@
 //  - As operações marcadas ATÔMICA fazem tudo-ou-nada (no D1: uma transação ou `batch`). Ver docs/atomicidade.md.
 //  - O repositório não conhece HTTP, papéis nem permissões; só dados e invariantes (sobreposição de mesa, id único, limites).
 
-import { plataformaWeb } from './plataforma.js';
+import { gerarCodigoReserva, plataformaWeb } from './plataforma.js';
+import { prepararReservaSemeada } from './reservas.js';
 
 function congelar(o) {
   if (o && typeof o === 'object') { Object.values(o).forEach(congelar); Object.freeze(o); }
@@ -25,7 +26,8 @@ export const IDEMPOTENCIA_MAX_PADRAO = 10000; // entradas por empresa (as mais a
 export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempotenciaMax } = {}) {
   const p = plat || plataformaWeb();
   const empresas = new Map(); // id -> { id, nome, agente, ambientes, modulos, chave, conhecimento: [], proxConhecimento }
-  let reservas = []; // { id, empresaId, mesaId, ambiente, data, horario, pessoas, inicio, fim (minutos absolutos), status, nomeCliente?, contato? }
+  const reservas = new Map(); // UUID interno -> reserva com o código público em id
+  const codigosPorEmpresa = new Map(); // empresa -> código já emitido -> UUID; preservado na exclusão
   const ttlIdem = idempotenciaTtlMs > 0 ? idempotenciaTtlMs : IDEMPOTENCIA_TTL_PADRAO_MS;
   const maxIdem = idempotenciaMax > 0 ? idempotenciaMax : IDEMPOTENCIA_MAX_PADRAO;
   const idempotencia = new Map(); // empresaId -> Map(chave -> { resposta, quando }), na ordem em que foram gravadas
@@ -49,13 +51,25 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
   };
   const historico = [];
   const boot = p.uuid();
-  let seqReserva = 0;
   let tentativasAdmin = { n: 0, ate: 0 };
 
   const sobrepoe = (r, mesaId, ini, fim, ignorarId) =>
     r.id !== ignorarId && r.mesaId === mesaId && r.status === 'confirmada' && ini < r.fim && fim > r.inicio;
   const ocupada = (empresaId, mesaId, ini, fim, ignorarId) =>
-    reservas.some((r) => r.empresaId === empresaId && sobrepoe(r, mesaId, ini, fim, ignorarId));
+    [...reservas.values()].some((r) => r.empresaId === empresaId && sobrepoe(r, mesaId, ini, fim, ignorarId));
+  const obterReserva = (empresaId, id) => reservas.get(codigosPorEmpresa.get(empresaId)?.get(id)) || null;
+
+  function inserirReserva(empresaId, dados) {
+    const codigos = codigosPorEmpresa.get(empresaId) || new Map();
+    const codigo = gerarCodigoReserva(p, (c) => codigos.has(c));
+    const uuid = p.uuid();
+    if (reservas.has(uuid)) throw new Error('UUID de reserva duplicado');
+    const reserva = { id: codigo, empresaId, ...dados };
+    reservas.set(uuid, reserva);
+    codigos.set(codigo, uuid);
+    codigosPorEmpresa.set(empresaId, codigos);
+    return reserva;
+  }
 
   return {
     plat: p,
@@ -63,8 +77,23 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
     // ---------- empresas ----------
     async empresaObter(id) { return empresas.get(id) || null; },
     async empresaListar() { return [...empresas.values()]; },
-    async empresaCriar({ id, nome, agente, ambientes, modulos }) {
+    async empresaCriar({ id, nome, agente, ambientes, modulos, reservas: sementes = [] }) {
       const e = { id, nome, agente, ambientes, chave: null, modulos: { ...MODULOS_PADRAO, ...(modulos || {}) }, conhecimento: [], proxConhecimento: 1 };
+      const criadas = [];
+      try {
+        for (const semente of sementes) {
+          const dados = prepararReservaSemeada(semente, ambientes);
+          if (dados.status === 'confirmada' && ocupada(id, dados.mesaId, dados.inicio, dados.fim)) throw new Error('sobreposição de reservas na semente');
+          criadas.push(inserirReserva(id, dados));
+        }
+      } catch (erro) {
+        const codigos = codigosPorEmpresa.get(id);
+        for (const reserva of criadas) {
+          reservas.delete(codigos.get(reserva.id));
+          codigos.delete(reserva.id);
+        }
+        throw erro;
+      }
       empresas.set(id, e);
       return e;
     },
@@ -134,12 +163,12 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
 
     // ---------- reservas ----------
     async reservaListar(empresaId, { data } = {}) {
-      return reservas.filter((r) => r.empresaId === empresaId && (!data || r.data === data));
+      return [...reservas.values()].filter((r) => r.empresaId === empresaId && (!data || r.data === data));
     },
-    async reservaObter(empresaId, id) { return reservas.find((x) => x.id === id && x.empresaId === empresaId) || null; },
+    async reservaObter(empresaId, id) { return obterReserva(empresaId, id); },
     // Reservas confirmadas da empresa (menos `ignorarId`): base para calcular mesas livres e o mapa.
     async reservaConfirmadas(empresaId, ignorarId) {
-      return reservas.filter((r) => r.empresaId === empresaId && r.status === 'confirmada' && r.id !== ignorarId);
+      return [...reservas.values()].filter((r) => r.empresaId === empresaId && r.status === 'confirmada' && r.id !== ignorarId);
     },
     // ATÔMICA. Reserva a primeira mesa livre da lista `candidatas` ([{ mesaId, ambiente }], em ordem de preferência):
     //   1) se a chave de idempotência já tem resposta, devolve { criada: false, resposta };
@@ -150,8 +179,7 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
       if (antiga) return { criada: false, resposta: antiga };
       for (const c of candidatas) {
         if (ocupada(empresaId, c.mesaId, reserva.inicio, reserva.fim)) continue;
-        const r = { id: ++seqReserva, empresaId, mesaId: c.mesaId, ambiente: c.ambiente, ...reserva, status: 'confirmada' };
-        reservas.push(r);
+        const r = inserirReserva(empresaId, { mesaId: c.mesaId, ambiente: c.ambiente, ...reserva, status: 'confirmada' });
         const resposta = { status: 'confirmada', reservaId: r.id, mesa: r.mesaId, ambiente: r.ambiente };
         if (chave) idemGravar(empresaId, chave, resposta);
         return { criada: true, resposta, reserva: r };
@@ -166,7 +194,7 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
     // ATÔMICA. Muda pessoas/data/horário/mesa de uma reserva confirmada, rechecando a sobreposição. cliente: campos de nome/contato
     // ('' apaga o campo). { ok: true, reserva } | { ok: false, motivo: 'conflito' }
     async reservaEditar({ empresaId, id, dados, cliente }) {
-      const r = reservas.find((x) => x.id === id && x.empresaId === empresaId);
+      const r = obterReserva(empresaId, id);
       if (ocupada(empresaId, dados.mesaId, dados.inicio, dados.fim, id)) return { ok: false, motivo: 'conflito' };
       Object.assign(r, dados, cliente || {});
       for (const k of Object.keys(cliente || {})) if (cliente[k] === '') delete r[k];
@@ -174,13 +202,13 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
     },
     // ATÔMICA. Cancela (libera a mesa). Devolve a reserva.
     async reservaCancelar(empresaId, id) {
-      const r = reservas.find((x) => x.id === id && x.empresaId === empresaId);
+      const r = obterReserva(empresaId, id);
       r.status = 'cancelada';
       return r;
     },
     // ATÔMICA. Reativa rechecando a sobreposição. { ok: true, reserva } | { ok: false, motivo: 'conflito' }
     async reservaReativar(empresaId, id) {
-      const r = reservas.find((x) => x.id === id && x.empresaId === empresaId);
+      const r = obterReserva(empresaId, id);
       if (r.status === 'confirmada') return { ok: true, reserva: r };
       if (ocupada(empresaId, r.mesaId, r.inicio, r.fim, id)) return { ok: false, motivo: 'conflito' };
       r.status = 'confirmada';
@@ -236,7 +264,11 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
     // e grava o evento de auditoria junto. Devolve o evento gravado.
     async empresaExcluir(id, evento) {
       empresas.delete(id);
-      reservas = reservas.filter((r) => r.empresaId !== id);
+      const codigos = codigosPorEmpresa.get(id);
+      for (const [codigo, uuid] of codigos || []) {
+        reservas.delete(uuid);
+        codigos.set(codigo, null);
+      }
       idempotencia.delete(id);
       return this.historicoAcrescentar(evento);
     },

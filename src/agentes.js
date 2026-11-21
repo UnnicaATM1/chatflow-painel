@@ -15,7 +15,7 @@ function erro(msg, codigo) {
 
 // Registro da empresa (somente leitura) ou 404.
 export async function empresa(store, id) {
-  const l = await store.empresaObter(id);
+  const l = await store.empresaObter(id, { incluirConhecimento: false });
   if (!l) throw erro('empresa inexistente', 404);
   return l;
 }

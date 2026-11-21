@@ -7,10 +7,10 @@
 design-system: 60%
 telas-referencia: 100%
 frontend: 75%
-backend: 90%
+backend: 92%
 planejamento-tela-01: 100%
 api-rust: 95%
-geral: 73%
+geral: 74%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -25,17 +25,20 @@ Regras deste bloco, sempre seguir:
 
 ## 📍 Onde paramos
 
-TASK-010 validada no Node 24 com 74 testes verdes em cada modo de banco. O Node usa SQLite com `CHATFLOW_BANCO=sqlite` e `CHATFLOW_BANCO_ARQUIVO` (padrão `chatflow.sqlite`), com idempotência persistente, histórico append-only e desfazer transacional. Memória segue como padrão do servidor.
+TASK-010 fechada com SQLite em disco em WAL, synchronous=FULL, busy_timeout, FK e verificação de integridade na abertura. Anexos ficam em `<arquivo-sqlite>.arquivos/`.
+TASK-012 em JS e SQLite usa UUID v4 interno e código público de reserva de oito caracteres por empresa. A carga legada emite códigos. O mapa mantém o formato anterior e ignorar inválido retorna 400. A suíte completa passou 97/97 em memória e SQLite.
+A TASK-013 preparou a configuração de produção em Node 24 e o verificador de persistência. Falta homologar o ambiente conforme `docs/publicacao-producao.md`.
 
 ## ✅ Pendências ativas
 
+- [ ] Homologar HTTPS, proxy, volume SQLite e restauração conjunta do banco e dos anexos conforme `docs/publicacao-producao.md`
+- [ ] Após o commit de congelamento, completar a operação do SQLite com arquivo .pid, encerramento com checkpoint, limite do journal e mecanismo para a migração 0002
 - [ ] Definir com o João o objetivo do projeto (app novo, protótipo ou só o design system) e a stack
 - [ ] Conferir tipografia e espaçamento do design system com o front-end real (valores são leituras visuais dos prints)
 - [ ] Validar o plano da tela 01, os breakpoints propostos e as referências ausentes de conversa preenchida, histórico móvel e apagamentos
 - [ ] Após definir stack e escopo, implementar o estado vazio desktop/celular da tela 01 usando `docs/plano-01-atendimento-conversas.md`
 
-- [ ] T05 revisar a TASK-010 e validar a migração em D1 local antes de implementar o adaptador Cloudflare
-- [ ] Trocar o `reservaId` (contador global, vaza o total de reservas entre empresas) por UUID ou id por empresa ao entrar o banco
+- [ ] Validar a migração em D1 local e implementar o adaptador Cloudflare com bucket R2 privado
 - [ ] Combinar com a equipe de integração o contrato final da API e a emissão/rotação dos tokens
 - [ ] Revisar premissas 🟡 de `_reversa_sdd/prd.md` (duração 90 min, métricas, LGPD)
 
@@ -69,6 +72,9 @@ TASK-010 validada no Node 24 com 74 testes verdes em cada modo de banco. O Node 
 
 ## 🧠 Aprendizados importantes
 
+- O `reservaId` público é um código por empresa. `reservas_codigos` preserva os códigos emitidos após exclusão da empresa. O UUID interno fica fora do HTTP.
+
+- Backup e restauração do SQLite precisam incluir o banco e seu diretório "<arquivo-sqlite>.arquivos/".
 - SQLite usa uma fila por arquivo no processo Node para evitar bloquear o loop enquanto uma transação assíncrona aguarda a limpeza ou o histórico.
 - Design system foi montado a partir de 9 telas do Hotel Demonstração (Atendimento, Gestão, Operação, A&B) e do PDF de 10/11/2026; nada veio do código-fonte.
 - Paleta: moldura navy, trabalho claro, ciano (`brand-500`) só para ação; fontes Inter (UI), JetBrains Mono (números) e Fraunces (documentos).
@@ -119,6 +125,7 @@ TASK-010 validada no Node 24 com 74 testes verdes em cada modo de banco. O Node 
 
 ## 🚫 Armadilhas conhecidas
 
+- A revisão alterou a migração inicial. Arquivos criados com o rascunho anterior já marcam user_version=1 e exigem migração própria para receber o esquema revisado preservando dados.
 - Vocabulário dos prints é de hotel (UH, Governança, enxoval); para restaurante trocar por mesa/salão/cozinha mantendo a estrutura.
 - Não usar travessão em textos para cliente e prompts de agente (regra do README do design system).
 - TopBar não implementa layout móvel no bundle; ChatFab não encaminha onClick nem fixa posição; EmptyState adiciona tracejado ausente no print.
@@ -132,6 +139,7 @@ TASK-010 validada no Node 24 com 74 testes verdes em cada modo de banco. O Node 
 
 ## 📚 Histórico recente
 
+- 2026-11-21 — TASK-013: roteiro de produção, ambiente SQLite explícito e verificação local de persistência após reinício
 - 2026-11-21 — TASK-010: docs de persistência (D1, R2, LGPD, id de reserva), limpeza de idempotência em SQL com testes e revisão do esquema e do repositório SQLite do T04
 - 2026-11-15 — TASK-009: idempotência com validade e teto (JS e Rust), 5 testes novos no JS e 6 no Rust; memória sob carga estabilizada
 - 2026-11-15 — TASK-008: one-core em wasm32 (prova executada no Node), CHATFLOW_FUSO no Rust, teste de carga (60 s, 5000 conexões, 0 erros) e achado de crescimento de memória por idempotência

@@ -14,6 +14,8 @@ const AGORA = 1_800_000_000_000;
 function banco(linhas = []) {
   const db = new DatabaseSync(':memory:');
   db.exec(fs.readFileSync(MIGRACAO, 'utf8')); // o esquema real do T04, não uma cópia
+  const insEmpresa = db.prepare("INSERT INTO empresas (id, nome, agente, modulos) VALUES (?, ?, '{}', '{}')");
+  for (const id of new Set(linhas.map(([empresaId]) => empresaId))) insEmpresa.run(id, id);
   const ins = db.prepare('INSERT INTO idempotencia (empresa_id, chave, resposta, criada_em) VALUES (?, ?, ?, ?)');
   for (const [e, c, t] of linhas) ins.run(e, c, '{}', t);
   return db;

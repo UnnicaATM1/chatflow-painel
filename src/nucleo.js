@@ -14,6 +14,7 @@ import { mapa } from './mapa.js';
 import * as conhecimento from './conhecimento.js';
 import { contexto, recursosDe } from './contexto.js';
 import { fusoDe } from './tempo.js';
+import { codigoReservaValido } from './plataforma.js';
 
 export const LIMITE_CORPO = 512 * 1024; // 5 campos de texto somam até ~49 mil caracteres
 export const LIMITE_CORPO_ARQUIVO = 6 * 1024 * 1024; // documento de até 4 MB em base64
@@ -105,7 +106,7 @@ const RECURSOS_RESERVAS = ['reservas', 'disponibilidade', 'mapa', 'ambientes', '
 
 // true se a empresa usa o recurso (ou se ela nem existe: o handler seguinte responde 404)
 async function moduloLigado(store, id, nome) {
-  const e = await store.empresaObter(id);
+  const e = await store.empresaObter(id, { incluirConhecimento: false });
   return !e || e.modulos[nome] !== false;
 }
 
@@ -261,7 +262,7 @@ export async function tratar(req, ctx) {
 
     if (partes[0] === 'empresas' && partes.length === 1 && req.metodo === 'GET') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
-      return resp(200, (await store.empresaListar()).map((l) => ({ id: l.id, nome: l.nome, modulos: { ...l.modulos } })));
+      return resp(200, (await store.empresaListar({ incluirConhecimento: false })).map((l) => ({ id: l.id, nome: l.nome, modulos: { ...l.modulos } })));
     }
     // PATCH /empresas/:id  { nome }  (renomear a empresa)
     if (partes[0] === 'empresas' && partes.length === 2 && req.metodo === 'PATCH') {
@@ -301,9 +302,9 @@ export async function tratar(req, ctx) {
     // PATCH /empresas/:id/reservas/:rid {pessoas?,data?,horario?,mesaId?} | {status:'cancelada'|'confirmada'}; DELETE cancela
     if (partes[0] === 'empresas' && partes[2] === 'reservas' && partes.length === 4 && (req.metodo === 'PATCH' || req.metodo === 'DELETE')) {
       if (!staff) return resp(403, { erro: 'sem permissão' });
-      const lid = decodeURIComponent(partes[1]), rid = Number(partes[3]);
+      const lid = decodeURIComponent(partes[1]), rid = decodeURIComponent(partes[3]);
       if (!(await moduloLigado(store, lid, 'reservas'))) return resp(404, { erro: 'recurso "reservas" não habilitado para esta empresa' });
-      if (!Number.isInteger(rid)) return resp(404, { erro: 'reserva inexistente' });
+      if (!codigoReservaValido(rid)) return resp(404, { erro: 'reserva inexistente' });
       const ator = quem(req, papel);
       if (req.metodo === 'DELETE') return resp(200, await mudarReserva(store, lid, rid, () => cancelarReserva(store, lid, rid), ator));
       const b = await lerCorpo(req);
@@ -342,7 +343,7 @@ export async function tratar(req, ctx) {
       if (partes.length === 4 && req.metodo === 'GET') return resp(200, await conhecimento.obter(store, eid, itemId));
       if (partes.length === 4 && req.metodo === 'PATCH') {
         if (!staff) return resp(403, { erro: 'sem permissão' });
-        const antes = conhecimento.resumo((await conhecimento.achar(store, eid, itemId)).item);
+        const antes = conhecimento.resumo((await conhecimento.achar(store, eid, itemId, { incluirArquivo: false })).item);
         const item = await conhecimento.editar(store, eid, itemId, await lerCorpo(req, LIMITE_CORPO_ARQUIVO));
         const d = diff(antes, conhecimento.resumo(item));
         if (Object.keys(d.depois).length) await registrar(store, { empresaId: eid, entidade: 'conhecimento', entidadeId: itemId, acao: 'editada', ...ator, ...d });
@@ -433,8 +434,9 @@ export async function tratar(req, ctx) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(data || '') || !/^\d{2}:\d{2}$/.test(horario || '') || !Number.isInteger(pessoas) || pessoas < 1) {
         return resp(400, { erro: 'data (AAAA-MM-DD), horario (HH:MM) e pessoas obrigatórios' });
       }
-      const ign = Number(url.searchParams.get('ignorar'));
-      return resp(200, await disponibilidade(store, empresaId, data, horario, pessoas, Number.isInteger(ign) && ign > 0 ? ign : undefined));
+      const ign = url.searchParams.get('ignorar');
+      if (ign !== null && !codigoReservaValido(ign)) return resp(400, { erro: 'código de reserva inválido em ignorar' });
+      return resp(200, await disponibilidade(store, empresaId, data, horario, pessoas, ign ?? undefined));
     }
     if (recurso === 'reservas' && req.metodo === 'GET') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
@@ -470,7 +472,7 @@ export async function tratar(req, ctx) {
       if (b.confirmarNome !== l.nome) return resp(400, { erro: 'digite o nome exato da empresa para confirmar' });
       const instantaneo = {
         nome: l.nome, agente: await lerConfig(store, l.id), ambientes: l.ambientes, chaveApiAtiva: !!l.chave, modulos: { ...l.modulos },
-        conhecimento: (await store.conhecimentoListar(l.id)).map(conhecimento.resumo),
+        conhecimento: (await store.conhecimentoListar(l.id, { incluirArquivo: false })).map(conhecimento.resumo),
         reservas: (await store.reservaListar(l.id)).map(publica),
       };
       await store.empresaExcluir(l.id, { empresaId: l.id, entidade: 'empresa', entidadeId: l.id, acao: 'excluida', ...ator, antes: instantaneo, depois: {} });

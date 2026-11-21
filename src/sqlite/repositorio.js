@@ -1,13 +1,16 @@
-import { readFileSync, realpathSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { plataformaWeb } from '../plataforma.js';
+import { gerarCodigoReserva, plataformaWeb } from '../plataforma.js';
 import { IDEMPOTENCIA_MAX_PADRAO, IDEMPOTENCIA_TTL_PADRAO_MS } from '../repositorio.js';
+import { prepararReservaSemeada } from '../reservas.js';
 import { limparIdempotencia } from './idempotencia-limpeza.js';
 
 const MIGRACAO = new URL('../../db/migrations/0001_inicial.sql', import.meta.url);
 const MODULOS_PADRAO = { reservas: true, conhecimento: true };
 const CONFLITO = { ok: false, motivo: 'conflito' };
-const COLUNAS_RESERVA = 'id, empresa_id AS empresaId, mesa_id AS mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente AS nomeCliente, contato';
+const COLUNAS_RESERVA = 'codigo AS id, empresa_id AS empresaId, mesa_id AS mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente AS nomeCliente, contato';
 
 // O DatabaseSync pode bloquear esperando outra conexão. A fila compartilhada permite que
 // uma transação assíncrona termine antes de outra conexão local tentar obter o mesmo lock.
@@ -46,7 +49,18 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
   let chaveFila;
   try {
     chaveFila = caminho === ':memory:' ? db : realpathSync.native(caminho);
-    db.exec('PRAGMA busy_timeout = 5000');
+    db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON');
+    try {
+      const diagnosticos = db.prepare('PRAGMA integrity_check').all().map((linha) => linha.integrity_check);
+      if (diagnosticos.length !== 1 || diagnosticos[0] !== 'ok') throw new Error(diagnosticos.join('; ') || 'resultado vazio');
+    } catch (erro) {
+      throw new Error(`Integridade do SQLite falhou em "${caminho}": ${erro.message}`, { cause: erro });
+    }
+    if (caminho !== ':memory:' && db.prepare('PRAGMA journal_mode = WAL').get().journal_mode !== 'wal') {
+      throw new Error(`Não foi possível ativar WAL no SQLite em "${caminho}"`);
+    }
+    // FULL sincroniza cada commit do WAL, inclusive em caso de perda de energia.
+    db.exec('PRAGMA synchronous = FULL');
     if (db.prepare('PRAGMA user_version').get().user_version === 0) {
       const sql = readFileSync(MIGRACAO, 'utf8');
       db.exec('BEGIN IMMEDIATE');
@@ -61,35 +75,89 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
   const obter = (sql, ...params) => db.prepare(sql).get(...params);
   const listar = (sql, ...params) => db.prepare(sql).all(...params);
   const gravar = (sql, ...params) => db.prepare(sql).run(...params);
-  let eventosPendentes = null;
+  // O backup precisa copiar também este diretório de anexos ao lado do arquivo SQLite.
+  const pastaArquivos = caminho === ':memory:' ? null : `${chaveFila}.arquivos`;
+  const arquivosEmMemoria = pastaArquivos ? null : new Map();
+  let transacaoAtual = null;
+  // Em WAL um leitor comum não bloqueia o escritor. Protege a leitura do anexo local
+  // contra a remoção da versão anterior por outra conexão após o commit.
+  const inicioLeitura = (comArquivos) => comArquivos && pastaArquivos ? 'BEGIN IMMEDIATE' : 'BEGIN';
 
-  async function transacionar(executar) {
-    if (eventosPendentes) return executar();
-    db.exec('BEGIN IMMEDIATE');
-    const eventos = [];
-    eventosPendentes = eventos;
+  function caminhoDoArquivo(chave) {
+    const nome = chave.split('/').at(-1);
+    if (!/^[a-f0-9-]{36}$/.test(nome)) throw new Error('chave de arquivo inválida');
+    return join(pastaArquivos, nome);
+  }
+
+  function removerArquivo(chave) {
+    if (arquivosEmMemoria) arquivosEmMemoria.delete(chave);
+    else {
+      // A limpeza pode deixar um arquivo órfão, sem afetar a linha já confirmada ou revertida.
+      try { rmSync(caminhoDoArquivo(chave), { force: true }); } catch { /* limpeza posterior */ }
+    }
+  }
+
+  async function transacionar(executar, inicio = 'BEGIN IMMEDIATE') {
+    if (transacaoAtual) return executar();
+    db.exec(inicio);
+    const tx = { eventos: [], arquivosCriados: [], arquivosDescartar: [] };
+    transacaoAtual = tx;
     let resultado;
     try {
       resultado = await executar();
       db.exec('COMMIT');
     } catch (erro) {
       db.exec('ROLLBACK');
+      for (const chave of tx.arquivosCriados) removerArquivo(chave);
       throw erro;
     } finally {
-      eventosPendentes = null;
+      transacaoAtual = null;
     }
-    if (sink) for (const evento of eventos) sink(evento);
+    for (const chave of tx.arquivosDescartar) removerArquivo(chave);
+    if (sink) for (const evento of tx.eventos) sink(evento);
     return resultado;
   }
 
-  const listarConhecimento = (id) =>
-    listar('SELECT item FROM conhecimento WHERE empresa_id = ? ORDER BY id', id).map((linha) => JSON.parse(linha.item));
-  const obterConhecimento = (empresaId, id) => {
+  function guardarArquivo(empresaId, item) {
+    if (typeof item.arquivo?.base64 !== 'string') return item;
+    const { base64, ...arquivo } = item.arquivo;
+    const bytes = p.base64Decodificar(base64);
+    const chave = `empresas/${encodeURIComponent(empresaId)}/conhecimento/${randomUUID()}`;
+    if (arquivosEmMemoria) {
+      arquivosEmMemoria.set(chave, bytes);
+      transacaoAtual.arquivosCriados.push(chave);
+    } else {
+      mkdirSync(pastaArquivos, { recursive: true, mode: 0o700 });
+      const fd = openSync(caminhoDoArquivo(chave), 'wx', 0o600);
+      transacaoAtual.arquivosCriados.push(chave);
+      try { writeFileSync(fd, bytes, { flush: true }); } finally { closeSync(fd); }
+    }
+    return { ...item, arquivo, arquivoChave: chave };
+  }
+
+  function carregarItem({ arquivoChave, ...item }, incluirArquivo) {
+    if (arquivoChave && incluirArquivo) {
+      const bytes = arquivosEmMemoria ? arquivosEmMemoria.get(arquivoChave) : readFileSync(caminhoDoArquivo(arquivoChave));
+      item.arquivo.base64 = p.base64Codificar(bytes);
+    }
+    return item;
+  }
+
+  const linhasConhecimento = (empresaId) =>
+    listar('SELECT item FROM conhecimento WHERE empresa_id = ? ORDER BY id', empresaId).map((linha) => JSON.parse(linha.item));
+  const listarConhecimento = (empresaId, incluirArquivo) =>
+    linhasConhecimento(empresaId).map((item) => carregarItem(item, incluirArquivo));
+  const obterItemGuardado = (empresaId, id) => {
     const linha = obter('SELECT item FROM conhecimento WHERE empresa_id = ? AND id = ?', empresaId, id);
     return linha ? JSON.parse(linha.item) : null;
   };
+  function descartarArquivosDaEmpresa(empresaId) {
+    for (const { arquivoChave } of linhasConhecimento(empresaId)) {
+      if (arquivoChave) transacaoAtual.arquivosDescartar.push(arquivoChave);
+    }
+  }
   const lerMesa = ({ mesa_id, capacidade, reservavel }) => ({ id: mesa_id, capacidade, reservavel: Boolean(reservavel) });
-  function lerEmpresa(linha) {
+  function lerEmpresa(linha, incluirConhecimento) {
     if (!linha) return null;
     const { id, nome, agente, chave, modulos, prox_conhecimento } = linha;
     const ambientes = listar('SELECT id, nome FROM ambientes WHERE empresa_id = ? ORDER BY id', id).map((a) => ({
@@ -98,7 +166,7 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
     }));
     return {
       id, nome, agente: JSON.parse(agente), ambientes, chave: JSON.parse(chave),
-      modulos: JSON.parse(modulos), conhecimento: listarConhecimento(id), proxConhecimento: prox_conhecimento,
+      modulos: JSON.parse(modulos), conhecimento: incluirConhecimento ? listarConhecimento(id, true) : [], proxConhecimento: prox_conhecimento,
     };
   }
 
@@ -112,11 +180,21 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
   }
 
   const obterReserva = (empresaId, id) =>
-    lerReserva(obter(`SELECT ${COLUNAS_RESERVA} FROM reservas WHERE empresa_id = ? AND id = ?`, empresaId, id));
+    lerReserva(obter(`SELECT ${COLUNAS_RESERVA} FROM reservas WHERE empresa_id = ? AND codigo = ?`, empresaId, id));
   const ocupada = (empresaId, mesaId, inicio, fim, ignorarId = null) => Boolean(obter(
     `SELECT 1 FROM reservas WHERE empresa_id = ? AND mesa_id = ? AND status = 'confirmada'
-      AND id IS NOT ? AND fim > ? AND inicio < ? LIMIT 1`, empresaId, mesaId, ignorarId, inicio, fim,
+      AND codigo IS NOT ? AND fim > ? AND inicio < ? LIMIT 1`, empresaId, mesaId, ignorarId, inicio, fim,
   ));
+
+  function inserirReserva(empresaId, reserva) {
+    const { mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nomeCliente, contato } = reserva;
+    const codigo = gerarCodigoReserva(p, (c) => Boolean(obter('SELECT 1 FROM reservas_codigos WHERE empresa_id = ? AND codigo = ?', empresaId, c)));
+    gravar(`INSERT INTO reservas
+      (id, empresa_id, codigo, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente, contato)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    p.uuid(), empresaId, codigo, mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nomeCliente ?? null, contato ?? null);
+    return codigo;
+  }
 
   function idemObter(empresaId, chave) {
     const entrada = obter('SELECT resposta, criada_em FROM idempotencia WHERE empresa_id = ? AND chave = ?', empresaId, chave);
@@ -144,7 +222,7 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
       empresaId, entidade, entidadeId == null ? null : String(entidadeId), acao, refSeq ?? null, JSON.stringify(evento),
     );
     const e = congelar({ seq, ...evento });
-    eventosPendentes.push(e);
+    transacaoAtual.eventos.push(e);
     return e;
   }
 
@@ -152,22 +230,28 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
   const interno = {
     plat: p,
 
-    async empresaObter(id) { return lerEmpresa(obter('SELECT * FROM empresas WHERE id = ?', id)); },
-    async empresaListar() { return listar('SELECT * FROM empresas ORDER BY rowid').map(lerEmpresa); },
-    async empresaCriar({ id, nome, agente, ambientes, modulos }) {
+    async empresaObter(id, { incluirConhecimento = true } = {}) {
+      return transacionar(() => lerEmpresa(obter('SELECT * FROM empresas WHERE id = ?', id), incluirConhecimento), inicioLeitura(incluirConhecimento));
+    },
+    async empresaListar({ incluirConhecimento = true } = {}) {
+      return transacionar(() => listar('SELECT * FROM empresas ORDER BY rowid').map((e) => lerEmpresa(e, incluirConhecimento)), inicioLeitura(incluirConhecimento));
+    },
+    async empresaCriar({ id, nome, agente, ambientes, modulos, reservas: sementes = [] }) {
       return transacionar(() => {
         const modulosFinais = { ...MODULOS_PADRAO, ...(modulos || {}) };
-        gravar(`INSERT INTO empresas (id, nome, agente, modulos) VALUES (?, ?, ?, ?)
-          ON CONFLICT (id) DO UPDATE SET nome = excluded.nome, agente = excluded.agente,
+        gravar(`INSERT INTO empresas (id, nome, nome_normalizado, agente, modulos) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (id) DO UPDATE SET nome = excluded.nome, nome_normalizado = excluded.nome_normalizado, agente = excluded.agente,
           modulos = excluded.modulos, chave = NULL, prox_conhecimento = 1`,
-        id, nome, JSON.stringify(agente), JSON.stringify(modulosFinais));
+        id, nome, nome.toLowerCase(), JSON.stringify(agente), JSON.stringify(modulosFinais));
         gravar('DELETE FROM ambientes WHERE empresa_id = ?', id);
+        descartarArquivosDaEmpresa(id);
         gravar('DELETE FROM conhecimento WHERE empresa_id = ?', id);
         for (const a of ambientes) {
           const ambienteId = inserirAmbiente(id, a.nome);
           for (const mesa of a.mesas) inserirMesa(id, ambienteId, mesa);
         }
-        return lerEmpresa(obter('SELECT * FROM empresas WHERE id = ?', id));
+        for (const semente of sementes) inserirReserva(id, prepararReservaSemeada(semente, ambientes));
+        return lerEmpresa(obter('SELECT * FROM empresas WHERE id = ?', id), false);
       });
     },
     async empresaProximoId() {
@@ -177,12 +261,14 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
       return `empresa_${n}`;
     },
     async empresaNomeEmUso(nome, ignorarId) {
-      return listar('SELECT id, nome FROM empresas').some((e) => e.id !== ignorarId && e.nome.toLowerCase() === nome.toLowerCase());
+      return Boolean(obter(`SELECT 1 FROM empresas WHERE nome_normalizado = ? AND id IS NOT ?
+        UNION ALL SELECT 1 FROM empresas WHERE nome = ? AND id IS NOT ? LIMIT 1`,
+      nome.toLowerCase(), ignorarId ?? null, nome, ignorarId ?? null));
     },
     async empresaRenomear(id, nome) {
       return transacionar(() => {
         const { nome: antes } = obter('SELECT nome FROM empresas WHERE id = ?', id);
-        gravar('UPDATE empresas SET nome = ? WHERE id = ?', nome, id);
+        gravar('UPDATE empresas SET nome = ?, nome_normalizado = ? WHERE id = ?', nome, nome.toLowerCase(), id);
         return { antes, depois: nome };
       });
     },
@@ -202,10 +288,8 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
     async chaveDefinir(id, chave) { gravar('UPDATE empresas SET chave = ? WHERE id = ?', JSON.stringify(chave), id); },
     async chaveRemover(id) { gravar('UPDATE empresas SET chave = NULL WHERE id = ?', id); },
     async empresaPorChaveHash(hash) {
-      for (const e of listar('SELECT id, chave FROM empresas WHERE chave IS NOT NULL ORDER BY rowid')) {
-        if (p.iguaisTempoConstante(hash, JSON.parse(e.chave).hash)) return e.id;
-      }
-      return null;
+      const e = obter('SELECT id, chave_hash FROM empresas WHERE chave_hash = ? ORDER BY rowid LIMIT 1', hash);
+      return e && p.iguaisTempoConstante(hash, e.chave_hash) ? e.id : null;
     },
 
     async ambienteCriar(empresaId, nome) {
@@ -239,25 +323,22 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
 
     async reservaListar(empresaId, { data } = {}) {
       return listar(`SELECT ${COLUNAS_RESERVA} FROM reservas WHERE empresa_id = ?
-        AND (? IS NULL OR data = ?) ORDER BY id`, empresaId, data || null, data || null).map(lerReserva);
+        AND (? IS NULL OR data = ?) ORDER BY rowid`, empresaId, data || null, data || null).map(lerReserva);
     },
     async reservaObter(empresaId, id) { return obterReserva(empresaId, id); },
     async reservaConfirmadas(empresaId, ignorarId = null) {
       return listar(`SELECT ${COLUNAS_RESERVA} FROM reservas WHERE empresa_id = ?
-        AND status = 'confirmada' AND id IS NOT ? ORDER BY id`, empresaId, ignorarId).map(lerReserva);
+        AND status = 'confirmada' AND codigo IS NOT ? ORDER BY rowid`, empresaId, ignorarId).map(lerReserva);
     },
     async reservaCriar({ empresaId, chave, candidatas, reserva }) {
       return transacionar(async () => {
         const antiga = chave ? idemObter(empresaId, chave) : null;
         if (antiga) return { criada: false, resposta: antiga };
-        const { data, horario, pessoas, inicio, fim, nomeCliente, contato } = reserva;
+        const { inicio, fim } = reserva;
         const candidata = candidatas.find((c) => !ocupada(empresaId, c.mesaId, inicio, fim));
         if (!candidata) return { conflito: true };
         const { mesaId, ambiente } = candidata;
-        const { lastInsertRowid: id } = gravar(`INSERT INTO reservas
-          (empresa_id, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente, contato)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmada', ?, ?)`,
-        empresaId, mesaId, ambiente, data, horario, pessoas, inicio, fim, nomeCliente ?? null, contato ?? null);
+        const id = inserirReserva(empresaId, { ...reserva, mesaId, ambiente, status: 'confirmada' });
         const resposta = { status: 'confirmada', reservaId: id, mesa: mesaId, ambiente };
         if (chave) await idemGravar(empresaId, chave, resposta);
         return { criada: true, resposta, reserva: obterReserva(empresaId, id) };
@@ -274,7 +355,7 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
         const nova = { ...atual, ...dados, ...cliente };
         if (ocupada(empresaId, nova.mesaId, nova.inicio, nova.fim, id)) return { ...CONFLITO };
         gravar(`UPDATE reservas SET mesa_id = ?, ambiente = ?, data = ?, horario = ?, pessoas = ?,
-          inicio = ?, fim = ?, nome_cliente = ?, contato = ? WHERE empresa_id = ? AND id = ?`,
+          inicio = ?, fim = ?, nome_cliente = ?, contato = ? WHERE empresa_id = ? AND codigo = ?`,
         nova.mesaId, nova.ambiente, nova.data, nova.horario, nova.pessoas, nova.inicio, nova.fim,
         cliente?.nomeCliente === '' ? null : nova.nomeCliente ?? null, cliente?.contato === '' ? null : nova.contato ?? null,
         empresaId, id);
@@ -282,7 +363,7 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
       });
     },
     async reservaCancelar(empresaId, id) {
-      return lerReserva(obter(`UPDATE reservas SET status = 'cancelada' WHERE empresa_id = ? AND id = ?
+      return lerReserva(obter(`UPDATE reservas SET status = 'cancelada' WHERE empresa_id = ? AND codigo = ?
         RETURNING ${COLUNAS_RESERVA}`, empresaId, id));
     },
     async reservaReativar(empresaId, id) {
@@ -290,13 +371,20 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
         const atual = obterReserva(empresaId, id);
         if (atual.status === 'confirmada') return { ok: true, reserva: atual };
         if (ocupada(empresaId, atual.mesaId, atual.inicio, atual.fim, id)) return { ...CONFLITO };
-        gravar("UPDATE reservas SET status = 'confirmada' WHERE empresa_id = ? AND id = ?", empresaId, id);
+        gravar("UPDATE reservas SET status = 'confirmada' WHERE empresa_id = ? AND codigo = ?", empresaId, id);
         return { ok: true, reserva: { ...atual, status: 'confirmada' } };
       });
     },
 
-    async conhecimentoListar(empresaId) { return listarConhecimento(empresaId); },
-    async conhecimentoObter(empresaId, id) { return obterConhecimento(empresaId, id); },
+    async conhecimentoListar(empresaId, { incluirArquivo = true } = {}) {
+      return transacionar(() => listarConhecimento(empresaId, incluirArquivo), inicioLeitura(incluirArquivo));
+    },
+    async conhecimentoObter(empresaId, id, { incluirArquivo = true } = {}) {
+      return transacionar(() => {
+        const item = obterItemGuardado(empresaId, id);
+        return item ? carregarItem(item, incluirArquivo) : null;
+      }, inicioLeitura(incluirArquivo));
+    },
     async conhecimentoCriar(empresaId, item, maxItens) {
       return transacionar(() => {
         if (obter('SELECT COUNT(*) AS n FROM conhecimento WHERE empresa_id = ?', empresaId).n >= maxItens) {
@@ -305,23 +393,31 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
         const { id } = obter(`UPDATE empresas SET prox_conhecimento = prox_conhecimento + 1 WHERE id = ?
           RETURNING prox_conhecimento - 1 AS id`, empresaId);
         const novo = { id, ...item };
-        gravar('INSERT INTO conhecimento (empresa_id, id, item) VALUES (?, ?, ?)', empresaId, id, JSON.stringify(novo));
+        gravar('INSERT INTO conhecimento (empresa_id, id, item) VALUES (?, ?, ?)', empresaId, id, JSON.stringify(guardarArquivo(empresaId, novo)));
         return { ok: true, item: novo };
       });
     },
     async conhecimentoEditar(empresaId, id, mudancas) {
       return transacionar(() => {
-        const atual = obterConhecimento(empresaId, id);
+        const atual = obterItemGuardado(empresaId, id);
         if (!atual) return null;
         const novo = { ...atual, ...mudancas };
         for (const k of Object.keys(mudancas)) if (mudancas[k] === undefined) delete novo[k];
-        gravar('UPDATE conhecimento SET item = ? WHERE empresa_id = ? AND id = ?', JSON.stringify(novo), empresaId, id);
-        return novo;
+        if (Object.hasOwn(mudancas, 'arquivo')) delete novo.arquivoChave;
+        const guardado = guardarArquivo(empresaId, novo);
+        gravar('UPDATE conhecimento SET item = ? WHERE empresa_id = ? AND id = ?', JSON.stringify(guardado), empresaId, id);
+        if (atual.arquivoChave && atual.arquivoChave !== guardado.arquivoChave) transacaoAtual.arquivosDescartar.push(atual.arquivoChave);
+        return carregarItem(guardado, true);
       });
     },
     async conhecimentoExcluir(empresaId, id) {
-      const linha = obter('DELETE FROM conhecimento WHERE empresa_id = ? AND id = ? RETURNING item', empresaId, id);
-      return linha ? JSON.parse(linha.item) : null;
+      return transacionar(() => {
+        const linha = obter('DELETE FROM conhecimento WHERE empresa_id = ? AND id = ? RETURNING item', empresaId, id);
+        if (!linha) return null;
+        const item = JSON.parse(linha.item);
+        if (item.arquivoChave) transacaoAtual.arquivosDescartar.push(item.arquivoChave);
+        return carregarItem(item, true);
+      });
     },
 
     async historicoAcrescentar(ev) { return transacionar(() => acrescentarEvento(ev)); },
@@ -343,8 +439,8 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
 
     async empresaExcluir(id, evento) {
       return transacionar(() => {
+        descartarArquivosDaEmpresa(id);
         gravar('DELETE FROM empresas WHERE id = ?', id);
-        gravar('DELETE FROM idempotencia WHERE empresa_id = ?', id);
         return acrescentarEvento(evento);
       });
     },
