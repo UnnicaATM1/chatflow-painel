@@ -137,7 +137,7 @@ function criarLimitador(maximo) {
   };
 }
 
-// IP do cliente. Atrás de proxy confiável (KENDJI_CONFIAR_PROXY=1) usa o último valor de X-Forwarded-For (o que o proxy acrescentou).
+// IP do cliente. Atrás de proxy confiável (CHATFLOW_CONFIAR_PROXY=1) usa o último valor de X-Forwarded-For (o que o proxy acrescentou).
 function ipDe(req, confiarProxy) {
   if (confiarProxy) {
     const xff = String(req.headers['x-forwarded-for'] || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -158,10 +158,10 @@ export function criarContexto(opcoes = {}) {
   const plat = opcoes.plat || store.plat;
   return {
     store, plat, tokens,
-    adminSenha: opcoes.adminSenha || null, // KENDJI_ADMIN_SENHA: sem ela, excluir empresa fica desativado
-    corsOrigens: new Set((opcoes.corsOrigens || []).map((o) => String(o).trim()).filter(Boolean)), // lista exata (KENDJI_CORS_ORIGENS)
-    confiarProxy: opcoes.confiarProxy === true, // KENDJI_CONFIAR_PROXY=1: usar X-Forwarded-For
-    fuso: fusoDe(opcoes.fuso), // KENDJI_FUSO (padrão America/Sao_Paulo); nenhuma regra compara reservas com "agora" ainda
+    adminSenha: opcoes.adminSenha || null, // CHATFLOW_ADMIN_SENHA: sem ela, excluir empresa fica desativado
+    corsOrigens: new Set((opcoes.corsOrigens || []).map((o) => String(o).trim()).filter(Boolean)), // lista exata (CHATFLOW_CORS_ORIGENS)
+    confiarProxy: opcoes.confiarProxy === true, // CHATFLOW_CONFIAR_PROXY=1: usar X-Forwarded-For
+    fuso: fusoDe(opcoes.fuso), // CHATFLOW_FUSO (padrão America/Sao_Paulo); nenhuma regra compara reservas com "agora" ainda
     agora: opcoes.agora || (() => plat.agora()),
     limiteInvalidas: criarLimitador(opcoes.limiteInvalidasPorMinuto || 20), // por IP, chave inválida ou ausente
     limiteValidas: criarLimitador(opcoes.limitePorChavePorMinuto || 300), // por chave válida

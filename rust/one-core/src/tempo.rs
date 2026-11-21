@@ -2,10 +2,10 @@
 
 use crate::util::{Res, erro};
 
-/// Fuso de negócio padrão (`KENDJI_FUSO` vazio ou inválido).
+/// Fuso de negócio padrão (`CHATFLOW_FUSO` vazio ou inválido).
 pub const FUSO_PADRAO: &str = "America/Sao_Paulo";
 
-/// `KENDJI_FUSO`: nome de fuso IANA (`America/Sao_Paulo`, `UTC`, `Etc/GMT+3`). Valor vazio ou com caracteres que nenhum
+/// `CHATFLOW_FUSO`: nome de fuso IANA (`America/Sao_Paulo`, `UTC`, `Etc/GMT+3`). Valor vazio ou com caracteres que nenhum
 /// nome IANA tem volta ao padrão. Não há banco de fusos no núcleo (seria um `chrono-tz` só para guardar uma string), então
 /// um nome bem formado mas inexistente passa; o JavaScript (que valida com `Intl`) o trocaria pelo padrão.
 /// Hoje nenhuma regra compara reservas com "agora", então o fuso só é carregado e exposto em `Config::fuso`.

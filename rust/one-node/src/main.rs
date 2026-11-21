@@ -1,5 +1,5 @@
 //! `one-node`: adaptador nativo do ONE (axum + tokio). É o único crate com I/O: rede, arquivos de `web/`,
-//! variáveis de ambiente e o sumidouro de auditoria em arquivo. Mesmas variáveis `KENDJI_*` do servidor em JavaScript.
+//! variáveis de ambiente e o sumidouro de auditoria em arquivo. Mesmas variáveis `CHATFLOW_*` do servidor em JavaScript.
 
 use axum::Router;
 use axum::body::Body;
@@ -235,9 +235,9 @@ fn variavel(nome: &str) -> Option<String> {
     std::env::var(nome).ok().filter(|v| !v.is_empty())
 }
 
-/// Pasta `web/`: `KENDJI_WEB_DIR`, ou `web/` a partir do diretório atual e dos pais do executável.
+/// Pasta `web/`: `CHATFLOW_WEB_DIR`, ou `web/` a partir do diretório atual e dos pais do executável.
 fn achar_web() -> Option<PathBuf> {
-    if let Some(d) = variavel("KENDJI_WEB_DIR") {
+    if let Some(d) = variavel("CHATFLOW_WEB_DIR") {
         return Some(PathBuf::from(d));
     }
     let mut candidatos: Vec<PathBuf> = vec![PathBuf::from("web")];
@@ -249,7 +249,7 @@ fn achar_web() -> Option<PathBuf> {
         .find(|p| p.join("index.html").is_file())
 }
 
-/// As 3 empresas de demonstração (só com `KENDJI_DEMO=1`).
+/// As 3 empresas de demonstração (só com `CHATFLOW_DEMO=1`).
 fn demo() -> Vec<Json> {
     let campos = [
         "nome",
@@ -282,8 +282,8 @@ fn demo() -> Vec<Json> {
 #[tokio::main]
 async fn main() {
     let plat: Arc<dyn Plataforma> = Arc::new(Nativa);
-    // KENDJI_HISTORICO_ARQUIVO: grava cada evento de histórico (JSON por linha) neste arquivo, além da memória.
-    let sink: Option<one_store::memoria::Sink> = variavel("KENDJI_HISTORICO_ARQUIVO").map(|arq| {
+    // CHATFLOW_HISTORICO_ARQUIVO: grava cada evento de histórico (JSON por linha) neste arquivo, além da memória.
+    let sink: Option<one_store::memoria::Sink> = variavel("CHATFLOW_HISTORICO_ARQUIVO").map(|arq| {
         let f: one_store::memoria::Sink = Arc::new(move |e: &Json| {
             let gravado = std::fs::OpenOptions::new()
                 .create(true)
@@ -296,30 +296,30 @@ async fn main() {
         });
         f
     });
-    // KENDJI_IDEMPOTENCIA_HORAS (padrão 24) e KENDJI_IDEMPOTENCIA_MAX (padrão 10000 por empresa): validade e teto das
+    // CHATFLOW_IDEMPOTENCIA_HORAS (padrão 24) e CHATFLOW_IDEMPOTENCIA_MAX (padrão 10000 por empresa): validade e teto das
     // respostas de idempotência guardadas em memória.
-    let ttl_ms = variavel("KENDJI_IDEMPOTENCIA_HORAS")
+    let ttl_ms = variavel("CHATFLOW_IDEMPOTENCIA_HORAS")
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|h| *h > 0.0)
         .map_or(0, |h| (h * 3_600_000.0) as i64);
-    let max_idem = variavel("KENDJI_IDEMPOTENCIA_MAX")
+    let max_idem = variavel("CHATFLOW_IDEMPOTENCIA_MAX")
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);
     let repo = Memoria::nova(Arc::clone(&plat), sink).com_idempotencia(ttl_ms, max_idem);
 
     let mut empresas: Vec<Json> = Vec::new();
-    if variavel("KENDJI_DEMO").as_deref() == Some("1") {
+    if variavel("CHATFLOW_DEMO").as_deref() == Some("1") {
         empresas.extend(demo());
     }
-    // KENDJI_SEMENTE_ARQUIVO (só para testes de contrato): JSON com a lista de empresas iniciais.
-    if let Some(arq) = variavel("KENDJI_SEMENTE_ARQUIVO") {
+    // CHATFLOW_SEMENTE_ARQUIVO (só para testes de contrato): JSON com a lista de empresas iniciais.
+    if let Some(arq) = variavel("CHATFLOW_SEMENTE_ARQUIVO") {
         match std::fs::read_to_string(&arq)
             .map_err(|e| e.to_string())
             .and_then(|t| serde_json::from_str::<Vec<Json>>(&t).map_err(|e| e.to_string()))
         {
             Ok(v) => empresas.extend(v),
             Err(e) => {
-                eprintln!("não consegui ler KENDJI_SEMENTE_ARQUIVO: {e}");
+                eprintln!("não consegui ler CHATFLOW_SEMENTE_ARQUIVO: {e}");
                 std::process::exit(1);
             }
         }
@@ -338,27 +338,27 @@ async fn main() {
     }
 
     let mut cfg = Config::nova(Tokens {
-        chat: variavel("KENDJI_TOKEN_CHAT"),
-        cliente: variavel("KENDJI_TOKEN_CLIENTE"),
-        integracao: variavel("KENDJI_TOKEN_INTEGRACAO"),
+        chat: variavel("CHATFLOW_TOKEN_CHAT"),
+        cliente: variavel("CHATFLOW_TOKEN_CLIENTE"),
+        integracao: variavel("CHATFLOW_TOKEN_INTEGRACAO"),
     });
-    cfg.admin_senha = variavel("KENDJI_ADMIN_SENHA");
-    cfg.cors_origens = std::env::var("KENDJI_CORS_ORIGENS")
+    cfg.admin_senha = variavel("CHATFLOW_ADMIN_SENHA");
+    cfg.cors_origens = std::env::var("CHATFLOW_CORS_ORIGENS")
         .unwrap_or_default()
         .split(',')
         .map(str::to_string)
         .collect();
-    cfg.confiar_proxy = variavel("KENDJI_CONFIAR_PROXY").as_deref() == Some("1");
-    // KENDJI_LIMITE_CHAVE / KENDJI_LIMITE_INVALIDAS: requisições por minuto por chave válida (padrão 300) e por IP com chave inválida (padrão 20).
-    cfg.limite_validas = variavel("KENDJI_LIMITE_CHAVE")
+    cfg.confiar_proxy = variavel("CHATFLOW_CONFIAR_PROXY").as_deref() == Some("1");
+    // CHATFLOW_LIMITE_CHAVE / CHATFLOW_LIMITE_INVALIDAS: requisições por minuto por chave válida (padrão 300) e por IP com chave inválida (padrão 20).
+    cfg.limite_validas = variavel("CHATFLOW_LIMITE_CHAVE")
         .and_then(|v| v.parse().ok())
         .filter(|n| *n > 0)
         .unwrap_or(cfg.limite_validas);
-    cfg.limite_invalidas = variavel("KENDJI_LIMITE_INVALIDAS")
+    cfg.limite_invalidas = variavel("CHATFLOW_LIMITE_INVALIDAS")
         .and_then(|v| v.parse().ok())
         .filter(|n| *n > 0)
         .unwrap_or(cfg.limite_invalidas);
-    cfg.fuso = one_core::tempo::fuso_de(std::env::var("KENDJI_FUSO").ok().as_deref());
+    cfg.fuso = one_core::tempo::fuso_de(std::env::var("CHATFLOW_FUSO").ok().as_deref());
     let ctx = match Contexto::novo(repo, plat, cfg) {
         Ok(c) => c,
         Err(e) => {
@@ -379,7 +379,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    println!("Kendji ONE API na porta {porta}");
+    println!("ChatFlow Painel API na porta {porta}");
     let _ = LIMITE_CORPO_ARQUIVO; // o limite de cada rota é aplicado no núcleo
     if let Err(e) = axum::serve(
         listener,

@@ -2,13 +2,13 @@
 // que exercita a API de ponta a ponta dentro do módulo. Não faz parte do npm test (precisa do alvo wasm32).
 //
 //   cd rust && rustup target add wasm32-unknown-unknown && cargo build -p one-wasm-prova --target wasm32-unknown-unknown --release
-//   node tests/wasm-prova.js        (ou ONE_WASM=caminho/do/arquivo.wasm)
+//   node tests/wasm-prova.js        (ou CHATFLOW_WASM=caminho/do/arquivo.wasm)
 //
 // Sai com código 0 quando prova() devolve 0; senão, mostra o número da verificação que falhou.
 const fs = require('node:fs');
 const path = require('node:path');
 
-const arq = process.env.ONE_WASM || path.join(__dirname, '..', 'rust', 'target', 'wasm32-unknown-unknown', 'release', 'one_wasm_prova.wasm');
+const arq = process.env.CHATFLOW_WASM || path.join(__dirname, '..', 'rust', 'target', 'wasm32-unknown-unknown', 'release', 'one_wasm_prova.wasm');
 
 (async () => {
   const bytes = fs.readFileSync(arq);

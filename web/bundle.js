@@ -1,4 +1,4 @@
-/* @ds-bundle: {"format":4,"namespace":"KendjiOne","components":[{"name":"Button"},{"name":"Tabs"},{"name":"Segmented"},{"name":"FilterChip"},{"name":"Tag"},{"name":"StatusPill"},{"name":"StatusLegend"},{"name":"ColumnHeader"},{"name":"IssueCard"},{"name":"TaskRow"},{"name":"StatCard"},{"name":"TopBar"},{"name":"EmptyState"},{"name":"ChatFab"}]} */
+/* @ds-bundle: {"format":4,"namespace":"ChatFlow","components":[{"name":"Button"},{"name":"Tabs"},{"name":"Segmented"},{"name":"FilterChip"},{"name":"Tag"},{"name":"StatusPill"},{"name":"StatusLegend"},{"name":"ColumnHeader"},{"name":"IssueCard"},{"name":"TaskRow"},{"name":"StatCard"},{"name":"TopBar"},{"name":"EmptyState"},{"name":"ChatFab"}]} */
 (function () {
   var R = window.React, h = R.createElement;
   function cx() { return Array.prototype.filter.call(arguments, Boolean).join(" "); }
@@ -104,7 +104,7 @@
       h("svg", { viewBox: "0 0 24 24" }, h("path", { d: "M4 20l1.4-4.2A8 8 0 1 1 8.2 18.6L4 20z", strokeLinejoin: "round" })));
   }
 
-  window.KendjiOne = Object.assign(window.KendjiOne || {}, {
+  window.ChatFlow = Object.assign(window.ChatFlow || {}, {
     Button: Button, Tabs: Tabs, Segmented: Segmented, FilterChip: FilterChip, Tag: Tag, StatusPill: StatusPill,
     StatusLegend: StatusLegend, ColumnHeader: ColumnHeader, IssueCard: IssueCard, TaskRow: TaskRow, StatCard: StatCard,
     TopBar: TopBar, EmptyState: EmptyState, ChatFab: ChatFab

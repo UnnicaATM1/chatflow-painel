@@ -1,28 +1,28 @@
 'use strict';
 
-// Uso: KENDJI_DEMO=1 KENDJI_TOKEN_CHAT=... KENDJI_TOKEN_CLIENTE=... KENDJI_TOKEN_INTEGRACAO=... node src/server.js
+// Uso: CHATFLOW_DEMO=1 CHATFLOW_TOKEN_CHAT=... CHATFLOW_TOKEN_CLIENTE=... CHATFLOW_TOKEN_INTEGRACAO=... node src/server.js
 // Dados de demonstração em memória (as 3 empresas); persistência real fica para a próxima feature.
 import { criarStore, addEmpresa } from '../store.js';
 import { criarServidor } from './servidor.js';
 import fs from 'node:fs';
 import { plataformaNode } from './plataforma.js';
 
-// KENDJI_HISTORICO_ARQUIVO: grava cada evento de histórico (JSON por linha) neste arquivo, além da memória.
-const arquivoHistorico = process.env.KENDJI_HISTORICO_ARQUIVO || null;
+// CHATFLOW_HISTORICO_ARQUIVO: grava cada evento de histórico (JSON por linha) neste arquivo, além da memória.
+const arquivoHistorico = process.env.CHATFLOW_HISTORICO_ARQUIVO || null;
 const sink = arquivoHistorico ? (e) => {
   try { fs.appendFileSync(arquivoHistorico, JSON.stringify(e) + '\n', 'utf8'); }
   catch (err) { console.error('falha ao gravar histórico em arquivo:', err.message); }
 } : null;
-// KENDJI_IDEMPOTENCIA_HORAS (padrão 24) e KENDJI_IDEMPOTENCIA_MAX (padrão 10000 por empresa): validade e teto das
+// CHATFLOW_IDEMPOTENCIA_HORAS (padrão 24) e CHATFLOW_IDEMPOTENCIA_MAX (padrão 10000 por empresa): validade e teto das
 // respostas de idempotência guardadas em memória.
 const store = criarStore({
   plat: plataformaNode(),
   sink,
-  idempotenciaTtlMs: Number(process.env.KENDJI_IDEMPOTENCIA_HORAS) * 3600 * 1000 || undefined,
-  idempotenciaMax: Number(process.env.KENDJI_IDEMPOTENCIA_MAX) || undefined,
+  idempotenciaTtlMs: Number(process.env.CHATFLOW_IDEMPOTENCIA_HORAS) * 3600 * 1000 || undefined,
+  idempotenciaMax: Number(process.env.CHATFLOW_IDEMPOTENCIA_MAX) || undefined,
 });
-// As 3 empresas de demonstração só existem com KENDJI_DEMO=1. Em produção o servidor começa vazio.
-const demo = process.env.KENDJI_DEMO === '1';
+// As 3 empresas de demonstração só existem com CHATFLOW_DEMO=1. Em produção o servidor começa vazio.
+const demo = process.env.CHATFLOW_DEMO === '1';
 for (const n of demo ? [1, 2, 3] : []) {
   addEmpresa(store, {
     id: `empresa_${n}`,
@@ -38,26 +38,26 @@ for (const n of demo ? [1, 2, 3] : []) {
   });
 }
 
-// KENDJI_SEMENTE_ARQUIVO (só para testes de contrato): JSON com a lista de empresas iniciais (mesmos campos de addEmpresa).
-if (process.env.KENDJI_SEMENTE_ARQUIVO) {
-  for (const e of JSON.parse(fs.readFileSync(process.env.KENDJI_SEMENTE_ARQUIVO, 'utf8'))) await addEmpresa(store, e);
+// CHATFLOW_SEMENTE_ARQUIVO (só para testes de contrato): JSON com a lista de empresas iniciais (mesmos campos de addEmpresa).
+if (process.env.CHATFLOW_SEMENTE_ARQUIVO) {
+  for (const e of JSON.parse(fs.readFileSync(process.env.CHATFLOW_SEMENTE_ARQUIVO, 'utf8'))) await addEmpresa(store, e);
 }
 
-// KENDJI_TOKEN_CHAT é opcional e legado: uma chave global do chat vê TODAS as empresas. Prefira a chave de API de cada empresa.
+// CHATFLOW_TOKEN_CHAT é opcional e legado: uma chave global do chat vê TODAS as empresas. Prefira a chave de API de cada empresa.
 const tokens = {
-  chat: process.env.KENDJI_TOKEN_CHAT,
-  cliente: process.env.KENDJI_TOKEN_CLIENTE,
-  integracao: process.env.KENDJI_TOKEN_INTEGRACAO,
+  chat: process.env.CHATFLOW_TOKEN_CHAT,
+  cliente: process.env.CHATFLOW_TOKEN_CLIENTE,
+  integracao: process.env.CHATFLOW_TOKEN_INTEGRACAO,
 };
 const porta = Number(process.env.PORT) || 3000;
-// KENDJI_ADMIN_SENHA: senha do administrador para excluir empresa. Defina só no ambiente do servidor, nunca no código.
+// CHATFLOW_ADMIN_SENHA: senha do administrador para excluir empresa. Defina só no ambiente do servidor, nunca no código.
 criarServidor(store, tokens, {
-  adminSenha: process.env.KENDJI_ADMIN_SENHA,
-  // KENDJI_CORS_ORIGENS: origens do painel separadas por vírgula (lista exata). KENDJI_CONFIAR_PROXY=1: usar X-Forwarded-For.
-  corsOrigens: (process.env.KENDJI_CORS_ORIGENS || '').split(','),
-  confiarProxy: process.env.KENDJI_CONFIAR_PROXY === '1',
-  // KENDJI_LIMITE_CHAVE / KENDJI_LIMITE_INVALIDAS: requisições por minuto por chave válida (padrão 300) e por IP com chave inválida (padrão 20).
-  limitePorChavePorMinuto: Number(process.env.KENDJI_LIMITE_CHAVE) || undefined,
-  limiteInvalidasPorMinuto: Number(process.env.KENDJI_LIMITE_INVALIDAS) || undefined,
-  fuso: process.env.KENDJI_FUSO, // fuso de negócio (padrão America/Sao_Paulo); hoje só carregado, nenhuma regra usa "agora"
-}).listen(porta, () => console.log(`Kendji ONE API na porta ${porta}`));
+  adminSenha: process.env.CHATFLOW_ADMIN_SENHA,
+  // CHATFLOW_CORS_ORIGENS: origens do painel separadas por vírgula (lista exata). CHATFLOW_CONFIAR_PROXY=1: usar X-Forwarded-For.
+  corsOrigens: (process.env.CHATFLOW_CORS_ORIGENS || '').split(','),
+  confiarProxy: process.env.CHATFLOW_CONFIAR_PROXY === '1',
+  // CHATFLOW_LIMITE_CHAVE / CHATFLOW_LIMITE_INVALIDAS: requisições por minuto por chave válida (padrão 300) e por IP com chave inválida (padrão 20).
+  limitePorChavePorMinuto: Number(process.env.CHATFLOW_LIMITE_CHAVE) || undefined,
+  limiteInvalidasPorMinuto: Number(process.env.CHATFLOW_LIMITE_INVALIDAS) || undefined,
+  fuso: process.env.CHATFLOW_FUSO, // fuso de negócio (padrão America/Sao_Paulo); hoje só carregado, nenhuma regra usa "agora"
+}).listen(porta, () => console.log(`ChatFlow Painel API na porta ${porta}`));

@@ -1,4 +1,4 @@
-# GEMINI — Kendji ONE
+# GEMINI — ChatFlow Painel
 
 ## Handoff de Turno (continuidade com Claude Code e Codex)
 

@@ -4,14 +4,14 @@ const { spawn } = require('node:child_process');
 const net = require('node:net');
 const path = require('node:path');
 const RAIZ = path.join(__dirname, '..');
-// Binário Rust: ONE_RUST ou o build release do workspace (cargo build --release dentro de rust/).
-const RUST = process.env.ONE_RUST || path.join(RAIZ, 'rust', 'target', 'release', process.platform === 'win32' ? 'one-node.exe' : 'one-node');
+// Binário Rust: CHATFLOW_RUST ou o build release do workspace (cargo build --release dentro de rust/).
+const RUST = process.env.CHATFLOW_RUST || path.join(RAIZ, 'rust', 'target', 'release', process.platform === 'win32' ? 'one-node.exe' : 'one-node');
 
 const livre = () => new Promise((r) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => r(p)); }); });
 // Uso: node tests/diferencial-rust.js   (precisa do binário Rust compilado). Sai com código 1 se houver diferença.
 async function subir(cmd) {
   const porta = await livre();
-  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PORT: String(porta), KENDJI_DEMO: '1', KENDJI_TOKEN_CLIENTE: 'tcl', KENDJI_TOKEN_INTEGRACAO: 'ti', KENDJI_TOKEN_CHAT: 'tc', KENDJI_ADMIN_SENHA: 'adm-1' };
+  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PORT: String(porta), CHATFLOW_DEMO: '1', CHATFLOW_TOKEN_CLIENTE: 'tcl', CHATFLOW_TOKEN_INTEGRACAO: 'ti', CHATFLOW_TOKEN_CHAT: 'tc', CHATFLOW_ADMIN_SENHA: 'adm-1' };
   const f = spawn(cmd[0], cmd.slice(1), { env, cwd: RAIZ, stdio: ['ignore', 'ignore', 'inherit'] });
   for (let i = 0; i < 200; i++) { try { if ((await fetch(`http://127.0.0.1:${porta}/saude`)).status === 200) break; } catch {} await new Promise((r) => setTimeout(r, 25)); }
   return { base: `http://127.0.0.1:${porta}`, parar: () => f.kill() };

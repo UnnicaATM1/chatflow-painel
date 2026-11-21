@@ -1,0 +1,13 @@
+<!-- @dsCard group="Listas" height=170 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>TaskRow</title>
+<style>body{margin:0;padding:16px;background:var(--surface-page);}</style></head>
+<body>
+<div id="root"></div>
+<script>
+  var K = window.ChatFlow, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div',{className:'k1 k1-stack'},h(K.TaskRow,{title:'Orçar o conserto do ar-condicionado',status:'Pendente',priority:'Urgente',due:'07/11/2026'}),h(K.TaskRow,{title:'Conferir o inventário de enxoval do 6º andar',status:'Em andamento',priority:'Alta',due:'09/11/2026'}),h(K.TaskRow,{title:'Enviar o resumo semanal para a diretoria',status:'Concluída',assignee:'Revisor Google Play',due:'06/11/2026'})));
+</script>
+</body>
+</html>

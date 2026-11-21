@@ -1,0 +1,13 @@
+<!-- @dsCard group="Navegação" height=56 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Segmented</title>
+<style>body{margin:0;padding:16px;background:var(--surface-page);}</style></head>
+<body>
+<div id="root"></div>
+<script>
+  var K = window.ChatFlow, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div',{className:'k1 k1-row'},h(K.Segmented,{items:['Semana','Mês']}),h(K.Segmented,{items:['Todas','Pendente','Em andamento','Concluída','Arquivadas']})));
+</script>
+</body>
+</html>

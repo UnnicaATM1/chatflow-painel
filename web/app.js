@@ -2,8 +2,8 @@
 
 (function () {
   // Endereço da API vindo de config.js (sem barra no fim). Vazio = mesma origem do painel.
-  var BASE = String((window.ONE_CONFIG && window.ONE_CONFIG.apiBase) || '').replace(/\/$/, '');
-  var R = window.React, h = R.createElement, K = window.KendjiOne;
+  var BASE = String((window.CHATFLOW_CONFIG && window.CHATFLOW_CONFIG.apiBase) || '').replace(/\/$/, '');
+  var R = window.React, h = R.createElement, K = window.ChatFlow;
   var useState = R.useState, useEffect = R.useEffect, useCallback = R.useCallback;
 
   function hoje() {

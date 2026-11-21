@@ -20,7 +20,7 @@ Referência de comportamento: o JavaScript de `src/` (núcleo em `src/nucleo.js`
 
 ## A régua: testes de contrato HTTP
 
-Os 51 testes atuais (`tests/`) testam a API por HTTP. Torne-os independentes da implementação: o teste sobe um servidor por **comando configurável** (`ONE_SERVIDOR=...`), em vez de importar o JS. Rodam contra o JavaScript hoje e contra o binário Rust amanhã, com os mesmos resultados. A versão Rust só substitui quando passar em todos. Não mude o contrato HTTP: rotas, status, JSON e cabeçalhos iguais.
+Os 51 testes atuais (`tests/`) testam a API por HTTP. Torne-os independentes da implementação: o teste sobe um servidor por **comando configurável** (`CHATFLOW_SERVIDOR=...`), em vez de importar o JS. Rodam contra o JavaScript hoje e contra o binário Rust amanhã, com os mesmos resultados. A versão Rust só substitui quando passar em todos. Não mude o contrato HTTP: rotas, status, JSON e cabeçalhos iguais.
 
 ## Fases da API
 

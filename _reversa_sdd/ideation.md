@@ -1,4 +1,4 @@
-# Ideação — Kendji ONE (Atendimento + Reservas)
+# Ideação — ChatFlow Painel (Atendimento + Reservas)
 > Selo 🟡 PLANEJADO
 
 - **Problema raiz:** restaurantes com várias empresas atendem clientes no chat sem fonte única de verdade para regras do agente e sem controle de mesas em tempo real; risco de overbooking e respostas inconsistentes.

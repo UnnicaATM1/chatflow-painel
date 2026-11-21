@@ -5,7 +5,7 @@
 - Parte 2 (T02): docs/plano-tela-01.md com layout desktop e celular, componentes reais, estados, responsividade, passos e lacunas da tela 01-atendimento-conversas.
 
 ## Testes e validacao
-- Os 7 componentes citados existem em KendjiOne-Design-System/components/.
+- Os 7 componentes citados existem em ChatFlow-Design-System/components/.
 - HANDOFF.md: bloco STATUS no formato, sem escapes literais, geral 12%.
 - T02 reportou links locais e git diff --check OK.
 

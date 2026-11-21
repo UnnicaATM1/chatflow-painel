@@ -1,4 +1,4 @@
-# PRD — Kendji ONE: Agentes e Reservas por empresa
+# PRD — ChatFlow Painel: Agentes e Reservas por empresa
 > Selo 🟡 PLANEJADO
 
 ## Escopo (in) — MVP

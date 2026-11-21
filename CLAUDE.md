@@ -1,4 +1,4 @@
-# CLAUDE — Kendji ONE
+# CLAUDE — ChatFlow Painel
 
 ## Handoff de Turno (continuidade com Codex e Gemini CLI)
 

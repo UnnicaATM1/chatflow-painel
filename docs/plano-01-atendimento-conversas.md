@@ -6,10 +6,10 @@ Este é o arquivo solicitado pelo advisor T001. Consolida o plano anterior de `p
 
 ## Fontes e limites
 
-- [README do design system](../KendjiOne-Design-System/README.md), [tokens.json](../KendjiOne-Design-System/tokens.json), READMEs dos componentes e implementação em [bundle.js](../KendjiOne-Design-System/components/bundle.js) e [bundle.css](../KendjiOne-Design-System/components/bundle.css).
-- [Print desktop](../Prints-telas-KendjiOne-demo/desktop/01-atendimento-conversas.png): 1440 × 900 px.
-- [Print celular](../Prints-telas-KendjiOne-demo/celular/01-atendimento-conversas.png): 360 × 780 px.
-- [Referência de telas para a Unnica](../Referencia-de-telas-KendjiOne-Unnica.pdf), de 10/11/2026: 10 páginas físicas lidas; orientação na página física 2 (rodapé 1/9), tela 01 na página física 3 (rodapé 2/9), também conferida visualmente.
+- [README do design system](../ChatFlow-Design-System/README.md), [tokens.json](../ChatFlow-Design-System/tokens.json), READMEs dos componentes e implementação em [bundle.js](../ChatFlow-Design-System/components/bundle.js) e [bundle.css](../ChatFlow-Design-System/components/bundle.css).
+- [Print desktop](../Prints-telas-ChatFlow-demo/desktop/01-atendimento-conversas.png): 1440 × 900 px.
+- [Print celular](../Prints-telas-ChatFlow-demo/celular/01-atendimento-conversas.png): 360 × 780 px.
+- [Referência de telas para a Unnica](../Referencia-de-telas-ChatFlow-Unnica.pdf), de 10/11/2026: 10 páginas físicas lidas; orientação na página física 2 (rodapé 1/9), tela 01 na página física 3 (rodapé 2/9), também conferida visualmente.
 
 Os dois prints mostram o estado vazio. Medidas abaixo são aproximações visuais, não especificações extraídas do aplicativo. Estados com mensagens, interações e larguras intermediárias são propostas de implementação e precisam de validação. O design system também foi extraído de referências visuais, sem código-fonte do produto.
 
@@ -50,20 +50,20 @@ O plano original foi escrito antes da implementação do MVP. Na revisão atual 
 
 ## Componentes existentes a reutilizar
 
-Todos os nomes desta tabela existem como diretórios em `KendjiOne-Design-System/components/`, com `README.md` e `preview.html`, e são exportados por `window.KendjiOne` no bundle. “Adaptação” significa composição/estilo no futuro aplicativo consumidor, sem alterar o design system nesta tarefa.
+Todos os nomes desta tabela existem como diretórios em `ChatFlow-Design-System/components/`, com `README.md` e `preview.html`, e são exportados por `window.ChatFlow` no bundle. “Adaptação” significa composição/estilo no futuro aplicativo consumidor, sem alterar o design system nesta tarefa.
 
 | Componente real e referência | Uso previsto e API verificada | Limite relevante |
 |---|---|---|
-| [TopBar](../KendjiOne-Design-System/components/TopBar/README.md) | Moldura desktop; `active="Atendimento"`, `unit`, `user`, `initials`, `logoSrc` e `modules` | Unidade é um `span`, busca é uma `div` e links usam `href="#"`. Não há comportamento de seleção/busca nem layout móvel implementado no CSS. O cabeçalho celular exige composição específica no consumidor. |
-| [Tabs](../KendjiOne-Design-System/components/Tabs/README.md) | Subnavegação; `items`, `value="Conversas"`, `onChange` | Já oferece rolagem horizontal e `aria-selected`; roteamento, associação aos painéis e navegação por setas precisam ser planejados no consumidor. |
-| [Button](../KendjiOne-Design-System/components/Button/README.md) | “Apagamentos registrados” com `variant="secondary"` e `onClick` | Destino e conteúdo desse fluxo não estão nos prints. Para futuras ações primárias, recomendado `accessible` para texto navy sobre ciano. |
-| [Segmented](../KendjiOne-Design-System/components/Segmented/README.md) | Alternância móvel Conversas/Histórico; `items`, `value`, `onChange` | Semântica de grupo com `aria-pressed`, não abas completas; visual atual tem trilho cinza e raios menores que as pílulas do print. Prever estilo local no consumidor. |
-| [FilterChip](../KendjiOne-Design-System/components/FilterChip/README.md) | Períodos do histórico: Hoje, 7 dias, 30 dias; `active`, `onClick`, texto em `children`, sem `count` | O consumidor garante seleção exclusiva e aplica filtro; o componente não consulta dados. |
-| [ChatFab](../KendjiOne-Design-System/components/ChatFab/README.md) | Assistente global, `label="Abrir chat"` | Tem aparência e nome acessível, mas não recebe/encaminha `onClick` e não define posição fixa. Planejar integração no consumidor; não presumir que já abre chat. |
+| [TopBar](../ChatFlow-Design-System/components/TopBar/README.md) | Moldura desktop; `active="Atendimento"`, `unit`, `user`, `initials`, `logoSrc` e `modules` | Unidade é um `span`, busca é uma `div` e links usam `href="#"`. Não há comportamento de seleção/busca nem layout móvel implementado no CSS. O cabeçalho celular exige composição específica no consumidor. |
+| [Tabs](../ChatFlow-Design-System/components/Tabs/README.md) | Subnavegação; `items`, `value="Conversas"`, `onChange` | Já oferece rolagem horizontal e `aria-selected`; roteamento, associação aos painéis e navegação por setas precisam ser planejados no consumidor. |
+| [Button](../ChatFlow-Design-System/components/Button/README.md) | “Apagamentos registrados” com `variant="secondary"` e `onClick` | Destino e conteúdo desse fluxo não estão nos prints. Para futuras ações primárias, recomendado `accessible` para texto navy sobre ciano. |
+| [Segmented](../ChatFlow-Design-System/components/Segmented/README.md) | Alternância móvel Conversas/Histórico; `items`, `value`, `onChange` | Semântica de grupo com `aria-pressed`, não abas completas; visual atual tem trilho cinza e raios menores que as pílulas do print. Prever estilo local no consumidor. |
+| [FilterChip](../ChatFlow-Design-System/components/FilterChip/README.md) | Períodos do histórico: Hoje, 7 dias, 30 dias; `active`, `onClick`, texto em `children`, sem `count` | O consumidor garante seleção exclusiva e aplica filtro; o componente não consulta dados. |
+| [ChatFab](../ChatFlow-Design-System/components/ChatFab/README.md) | Assistente global, `label="Abrir chat"` | Tem aparência e nome acessível, mas não recebe/encaminha `onClick` e não define posição fixa. Planejar integração no consumidor; não presumir que já abre chat. |
 
 ### Reuso parcial e elementos ausentes
 
-- [EmptyState](../KendjiOne-Design-System/components/EmptyState/README.md) existe e recebe `children`, mas aplica borda tracejada, padding e texto centralizado. Os vazios do print têm texto simples sem caixa tracejada. Recomendado usar texto semântico na composição dos painéis para fidelidade; reservar esse componente para vazios explicativos futuros ou avaliar estilo local. Não aplicá-lo diretamente como se reproduzisse o print.
+- [EmptyState](../ChatFlow-Design-System/components/EmptyState/README.md) existe e recebe `children`, mas aplica borda tracejada, padding e texto centralizado. Os vazios do print têm texto simples sem caixa tracejada. Recomendado usar texto semântico na composição dos painéis para fidelidade; reservar esse componente para vazios explicativos futuros ou avaliar estilo local. Não aplicá-lo diretamente como se reproduzisse o print.
 - `.k1-panel` é uma classe utilitária real em `bundle.css`, não um componente React exportado. Pode orientar superfície/borda/raio dos três painéis, ajustando padding por região no consumidor.
 - Não existem componentes dedicados para lista de conversas, linha de conversa, mensagens, composer, seletor de atendimento, cabeçalho móvel Concierge, modal de apagamentos ou painel de histórico. São lacunas do aplicativo a planejar, sem criar código agora.
 - Componentes de tarefas, assuntos e status de eventos existentes no catálogo não devem ser usados para inventar estados do atendimento. Não há equivalência documentada entre status de tarefa e controle humano/Capi.
@@ -144,7 +144,7 @@ Dados de validação recomendados para a implementação futura: lista vazia, li
 - Confirmar a regra dos 30 minutos, registro de intervenções, conflitos entre atendentes e indisponibilidade da conexão.
 - README da TopBar promete menu e busca compacta móvel, mas o bundle não os implementa; o print usa “Concierge”, diferente do módulo “Atendimento” desktop. Validar a relação entre módulo e contexto antes de definir navegação.
 - `ChatFab` é apenas visual no bundle atual. Definir integração sem presumir suporte a callback ou posicionamento pronto.
-- Logo localizado em `KendjiOne-Design-System/assets/Logos/one-lockup-dark.png`; o caminho abreviado `Logos/one-lockup-dark.png` citado no README da TopBar precisa ser resolvido pelo consumidor. Revisar fontes externas para o ambiente de execução.
+- Logo oficial ChatFlow em `web/logo-chatflow.png` (sem alteração). Revisar fontes externas para o ambiente de execução.
 - Tipografia, espaçamento, breakpoints e variantes de pílula ainda requerem conferência; esta tarefa não altera tokens nem componentes para resolver diferenças.
 
 ## Verificação dos componentes citados
@@ -153,12 +153,12 @@ Lista conferida contra os diretórios, READMEs, previews e exports do bundle:
 
 | Nome | Diretório existente |
 |---|---|
-| TopBar | `KendjiOne-Design-System/components/TopBar/` |
-| Tabs | `KendjiOne-Design-System/components/Tabs/` |
-| Button | `KendjiOne-Design-System/components/Button/` |
-| Segmented | `KendjiOne-Design-System/components/Segmented/` |
-| FilterChip | `KendjiOne-Design-System/components/FilterChip/` |
-| ChatFab | `KendjiOne-Design-System/components/ChatFab/` |
-| EmptyState (reuso parcial, não aplicado diretamente ao vazio do print) | `KendjiOne-Design-System/components/EmptyState/` |
+| TopBar | `ChatFlow-Design-System/components/TopBar/` |
+| Tabs | `ChatFlow-Design-System/components/Tabs/` |
+| Button | `ChatFlow-Design-System/components/Button/` |
+| Segmented | `ChatFlow-Design-System/components/Segmented/` |
+| FilterChip | `ChatFlow-Design-System/components/FilterChip/` |
+| ChatFab | `ChatFlow-Design-System/components/ChatFab/` |
+| EmptyState (reuso parcial, não aplicado diretamente ao vazio do print) | `ChatFlow-Design-System/components/EmptyState/` |
 
 Critérios documentais: desktop e celular cobertos; layout, componentes reais, estados, responsividade, passos e lacunas descritos. Validação de execução e comparação visual do futuro aplicativo permanecem fora desta entrega documental.

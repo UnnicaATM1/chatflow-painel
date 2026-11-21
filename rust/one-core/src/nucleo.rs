@@ -98,13 +98,13 @@ pub struct Tokens {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub tokens: Tokens,
-    /// `KENDJI_ADMIN_SENHA`: sem ela, excluir empresa fica desativado.
+    /// `CHATFLOW_ADMIN_SENHA`: sem ela, excluir empresa fica desativado.
     pub admin_senha: Option<String>,
-    /// `KENDJI_CORS_ORIGENS`: lista exata. Vazia: nenhum cabeçalho CORS.
+    /// `CHATFLOW_CORS_ORIGENS`: lista exata. Vazia: nenhum cabeçalho CORS.
     pub cors_origens: Vec<String>,
-    /// `KENDJI_CONFIAR_PROXY=1`: usar `X-Forwarded-For`.
+    /// `CHATFLOW_CONFIAR_PROXY=1`: usar `X-Forwarded-For`.
     pub confiar_proxy: bool,
-    /// Fuso de negócio (`KENDJI_FUSO`). Carregado e exposto; nenhuma regra o usa ainda.
+    /// Fuso de negócio (`CHATFLOW_FUSO`). Carregado e exposto; nenhuma regra o usa ainda.
     pub fuso: String,
     pub limite_invalidas: u32,
     pub limite_validas: u32,

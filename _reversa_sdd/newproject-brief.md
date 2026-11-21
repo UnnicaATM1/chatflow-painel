@@ -6,9 +6,9 @@
 **Usuário:** João
 
 ## Ideia original
-Módulo do Kendji ONE para restaurantes com 3 empresas. Cada empresa tem seu próprio agente de atendimento (config em Atendimento → Agentes) e suas próprias reservas (A&B → Reservas e Mapa de mesas). Um software externo de conversa lê a configuração do agente a cada mensagem (API autenticada, somente leitura, bloco inteiro) e registra reservas por chamada separada (idempotente; só confirma ao cliente após o resultado). Cadastro Empresa → Ambiente → Mesa em A&B → Configuração.
+Módulo do ChatFlow Painel para restaurantes com 3 empresas. Cada empresa tem seu próprio agente de atendimento (config em Atendimento → Agentes) e suas próprias reservas (A&B → Reservas e Mapa de mesas). Um software externo de conversa lê a configuração do agente a cada mensagem (API autenticada, somente leitura, bloco inteiro) e registra reservas por chamada separada (idempotente; só confirma ao cliente após o resultado). Cadastro Empresa → Ambiente → Mesa em A&B → Configuração.
 
 ## Restrições de integração (dadas pelo usuário)
 - Leitura da config: API autenticada de leitura, devolve descrição, habilidades, produtos e restrições em uma resposta, incluindo campos de edição reservada à equipe de integração.
-- Reserva: empresa, data, horário, pessoas, ambiente preferido opcional; Kendji ONE valida disponibilidade; indisponível → chat oferece outra opção; reenvio gera uma única reserva.
+- Reserva: empresa, data, horário, pessoas, ambiente preferido opcional; ChatFlow Painel valida disponibilidade; indisponível → chat oferece outra opção; reenvio gera uma única reserva.
 - Quem edita cada campo é definido pela equipe de integração.

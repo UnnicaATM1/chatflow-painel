@@ -10,7 +10,7 @@ a régua de contrato passar inteira (passou, ver abaixo). Plano e premissas: `do
 |---|---|
 | `one-store` | Modelo de dados, trait `Plataforma` (relógio e aleatoriedade), trait `Repositorio` (assíncrono, com as operações atômicas nomeadas de `docs/atomicidade.md`) e a versão em memória (`Memoria`). D1 e R2 entram aqui. |
 | `one-core` | Domínio e API: agentes, empresas, reservas, mapa, conhecimento (e busca), histórico, contexto, e `tratar(ctx, req) -> Resp`. Sem I/O, sem relógio nem aleatoriedade próprios, sem `tokio`. |
-| `one-node` | Adaptador nativo (`axum` + `tokio`): rede, arquivos de `web/` (lista fechada), variáveis `KENDJI_*`, sumidouro de auditoria em arquivo, descarte de corpo não lido. É o único com I/O. |
+| `one-node` | Adaptador nativo (`axum` + `tokio`): rede, arquivos de `web/` (lista fechada), variáveis `CHATFLOW_*`, sumidouro de auditoria em arquivo, descarte de corpo não lido. É o único com I/O. |
 
 Cada módulo de `one-core` espelha um arquivo de `src/` (`nucleo.rs` = `src/nucleo.js`, `reservas.rs` = `src/reservas.js`...).
 O JavaScript é a especificação.
@@ -20,13 +20,13 @@ O JavaScript é a especificação.
 ```
 cd rust
 cargo build --release
-KENDJI_TOKEN_INTEGRACAO=... PORT=3000 ./target/release/one-node      # no Windows: target\release\one-node.exe
+CHATFLOW_TOKEN_INTEGRACAO=... PORT=3000 ./target/release/one-node      # no Windows: target\release\one-node.exe
 ```
 
-Mesmas variáveis do servidor em JavaScript: `PORT`, `KENDJI_TOKEN_CHAT`, `KENDJI_TOKEN_CLIENTE`, `KENDJI_TOKEN_INTEGRACAO`,
-`KENDJI_ADMIN_SENHA`, `KENDJI_CORS_ORIGENS`, `KENDJI_CONFIAR_PROXY`, `KENDJI_DEMO`, `KENDJI_HISTORICO_ARQUIVO`,
-`KENDJI_SEMENTE_ARQUIVO` (só testes). A pasta `web/` é achada a partir do diretório atual e dos pais do executável, ou por
-`KENDJI_WEB_DIR`. `KENDJI_FUSO` (padrão `America/Sao_Paulo`) é lida e fica em `Config::fuso`; nenhuma regra usa "agora" ainda. Nome vazio ou com caracteres que um nome de fuso não tem volta ao padrão; como não há banco de fusos no núcleo, um nome bem formado mas inexistente passa (o JavaScript o trocaria pelo padrão). `KENDJI_LIMITE_CHAVE` e `KENDJI_LIMITE_INVALIDAS` mudam os limites de requisição por minuto (padrão 300 e 20). `KENDJI_IDEMPOTENCIA_HORAS` e `KENDJI_IDEMPOTENCIA_MAX` mudam a validade e o teto por empresa das respostas de idempotência (padrão 24 h e 10000).
+Mesmas variáveis do servidor em JavaScript: `PORT`, `CHATFLOW_TOKEN_CHAT`, `CHATFLOW_TOKEN_CLIENTE`, `CHATFLOW_TOKEN_INTEGRACAO`,
+`CHATFLOW_ADMIN_SENHA`, `CHATFLOW_CORS_ORIGENS`, `CHATFLOW_CONFIAR_PROXY`, `CHATFLOW_DEMO`, `CHATFLOW_HISTORICO_ARQUIVO`,
+`CHATFLOW_SEMENTE_ARQUIVO` (só testes). A pasta `web/` é achada a partir do diretório atual e dos pais do executável, ou por
+`CHATFLOW_WEB_DIR`. `CHATFLOW_FUSO` (padrão `America/Sao_Paulo`) é lida e fica em `Config::fuso`; nenhuma regra usa "agora" ainda. Nome vazio ou com caracteres que um nome de fuso não tem volta ao padrão; como não há banco de fusos no núcleo, um nome bem formado mas inexistente passa (o JavaScript o trocaria pelo padrão). `CHATFLOW_LIMITE_CHAVE` e `CHATFLOW_LIMITE_INVALIDAS` mudam os limites de requisição por minuto (padrão 300 e 20). `CHATFLOW_IDEMPOTENCIA_HORAS` e `CHATFLOW_IDEMPOTENCIA_MAX` mudam a validade e o teto por empresa das respostas de idempotência (padrão 24 h e 10000).
 
 ## Verificar
 
@@ -39,13 +39,13 @@ cd rust && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings 
 ```
 # JavaScript, em processo (padrão):                       npm test                                  -> 51 de 51
 # JavaScript, como processo externo:
-ONE_SERVIDOR='["node","src/server.js"]' node --test --test-force-exit tests/api.test.js      -> 34 de 34
+CHATFLOW_SERVIDOR='["node","src/server.js"]' node --test --test-force-exit tests/api.test.js      -> 34 de 34
 # Rust:
-ONE_SERVIDOR='["C:/caminho/rust/target/release/one-node.exe"]' node --test --test-force-exit tests/api.test.js  -> 34 de 34
+CHATFLOW_SERVIDOR='["C:/caminho/rust/target/release/one-node.exe"]' node --test --test-force-exit tests/api.test.js  -> 34 de 34
 ```
 
-`ONE_SERVIDOR` é um array JSON com o comando (sem shell, porque o caminho do projeto tem espaço). Cada teste sobe um processo
-novo, semeia a empresa de teste com `KENDJI_SEMENTE_ARQUIVO` e fala só por HTTP. Dos 43 testes de `tests/api.test.js`, 34 são de
+`CHATFLOW_SERVIDOR` é um array JSON com o comando (sem shell, porque o caminho do projeto tem espaço). Cada teste sobe um processo
+novo, semeia a empresa de teste com `CHATFLOW_SEMENTE_ARQUIVO` e fala só por HTTP. Dos 43 testes de `tests/api.test.js`, 34 são de
 contrato e 9 são internos do JavaScript e ficam **pulados** nesse modo (núcleo chamado direto, repositório, plataformas,
 varredura de `require`/`node:`, relógio injetado). O que cobre o mesmo terreno no Rust são os `cargo test` e o teste diferencial.
 
@@ -74,7 +74,7 @@ A mesma prova roda como `cargo test -p one-wasm-prova` no alvo nativo.
 `node tests/carga.js` (Rust por padrão; `CARGA_COMANDO='["node","src/server.js"]'` para o JavaScript; `CARGA_SEGUNDOS`,
 `CARGA_CONEX`, `CARGA_PARADAS`). Fase A: carga mista com escrita (40% leitura do agente, 20% disponibilidade, 20% POST de
 reserva com chave única, 10% busca, 10% saúde). Fase B: milhares de conexões abertas ao mesmo tempo. Fase C: a mesma carga
-depois, para ver se o servidor se recuperou. Os limites de requisição sobem por `KENDJI_LIMITE_CHAVE` e `KENDJI_LIMITE_INVALIDAS`.
+depois, para ver se o servidor se recuperou. Os limites de requisição sobem por `CHATFLOW_LIMITE_CHAVE` e `CHATFLOW_LIMITE_INVALIDAS`.
 O cliente é o próprio Node (teto de uns 13 mil req/s), então os números servem para comparar, não como capacidade máxima.
 
 Resultados neste computador (Windows, cliente e servidor na mesma máquina, 64 conexões):
@@ -92,8 +92,8 @@ ganha por rota, exceto no POST de reserva (-9%); na carga mista o JavaScript fic
 
 **Memória e idempotência (achado da carga, corrigido na TASK-009).** Antes, cada POST de reserva com chave nova guardava a
 resposta para sempre (inclusive a "indisponivel", que é grande), e a memória crescia ~4 MB/s sob escrita, nos dois servidores.
-Agora as respostas de idempotência **expiram** (24 h, `KENDJI_IDEMPOTENCIA_HORAS`) e têm **teto por empresa** (10000,
-`KENDJI_IDEMPOTENCIA_MAX`); passando do teto, saem as mais antigas. Dentro da validade a mesma chave devolve a resposta idêntica
+Agora as respostas de idempotência **expiram** (24 h, `CHATFLOW_IDEMPOTENCIA_HORAS`) e têm **teto por empresa** (10000,
+`CHATFLOW_IDEMPOTENCIA_MAX`); passando do teto, saem as mais antigas. Dentro da validade a mesma chave devolve a resposta idêntica
 (sem reserva duplicada); vencida, a chave é esquecida e o pedido é tratado de novo. O contrato HTTP não mudou (34 de 34 nos dois
 servidores, teste diferencial com 0 diferenças).
 
@@ -103,7 +103,7 @@ Memória do processo Rust (Windows, `tests/carga.js`, 64 conexões):
 |---|---|---|
 | 15 s de carga + 2000 conexões + 8 s | 6 -> 104 MB | 6 -> 104 MB (o teto de 10000 por empresa ainda não foi atingido) |
 | 60 s de carga + 5000 conexões + 30 s | 6 -> **391 MB** | 6 -> **111 MB** (sobe até ~107 MB e fica estável) |
-| 15 s com `KENDJI_IDEMPOTENCIA_MAX=1000` | (não medido) | 6 -> **26 MB**, plano em 25 MB durante os 15 s |
+| 15 s com `CHATFLOW_IDEMPOTENCIA_MAX=1000` | (não medido) | 6 -> **26 MB**, plano em 25 MB durante os 15 s |
 
 O JavaScript tem o mesmo limite e os mesmos testes, mas o RSS dele depende da coleta de lixo do V8 e não mostra a queda com a
 mesma nitidez (15 s: 56 -> 204 MB com o padrão, 56 -> 137 MB com teto de 1000).

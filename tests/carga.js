@@ -42,9 +42,9 @@ const pct = (v, p) => v.length ? v[Math.min(v.length - 1, Math.floor(v.length * 
   const semente = path.join(os.tmpdir(), `one-carga-${process.pid}.json`);
   fs.writeFileSync(semente, '[]');
   const env = {
-    PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, PORT: String(porta), KENDJI_DEMO: '1',
-    KENDJI_TOKEN_INTEGRACAO: TOKEN, KENDJI_LIMITE_CHAVE: '100000000', KENDJI_LIMITE_INVALIDAS: '100000000', KENDJI_SEMENTE_ARQUIVO: semente,
-    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('KENDJI_IDEMPOTENCIA_'))),
+    PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, PORT: String(porta), CHATFLOW_DEMO: '1',
+    CHATFLOW_TOKEN_INTEGRACAO: TOKEN, CHATFLOW_LIMITE_CHAVE: '100000000', CHATFLOW_LIMITE_INVALIDAS: '100000000', CHATFLOW_SEMENTE_ARQUIVO: semente,
+    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('CHATFLOW_IDEMPOTENCIA_'))),
   };
   const filho = spawn(COMANDO[0], COMANDO.slice(1), { env, cwd: RAIZ, stdio: ['ignore', 'ignore', 'inherit'], shell: false });
   const parar = () => { try { filho.kill(); } catch { /* já saiu */ } try { fs.unlinkSync(semente); } catch { /* já apagado */ } };

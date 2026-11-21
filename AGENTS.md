@@ -1,4 +1,4 @@
-# AGENTS — Kendji ONE
+# AGENTS — ChatFlow Painel
 
 ## Handoff de Turno (continuidade com Claude Code e Gemini CLI)
 

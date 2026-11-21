@@ -22,7 +22,7 @@ export function minutosAbsolutos(data, horario) {
   return ms / 60000 + hh * 60 + mm;
 }
 
-// Fuso de negócio (KENDJI_FUSO, padrão America/Sao_Paulo). Hoje nenhuma regra compara reservas com "agora",
+// Fuso de negócio (CHATFLOW_FUSO, padrão America/Sao_Paulo). Hoje nenhuma regra compara reservas com "agora",
 // então o fuso só é carregado e exposto; fica aqui para a primeira regra que precisar (ex.: bloquear reserva no passado).
 export const FUSO_PADRAO = 'America/Sao_Paulo';
 export function fusoDe(valor) {

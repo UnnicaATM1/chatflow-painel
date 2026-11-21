@@ -7,11 +7,11 @@ const { criarServidor } = require('../src/api');
 
 const T = { chat: 'tc', cliente: 'tcl', integracao: 'ti' };
 
-// Régua de contrato (docs/migracao-rust.md): sem ONE_SERVIDOR, o servidor sobe em processo (src/api.js).
-// Com ONE_SERVIDOR (array JSON do comando, ex.: ["node","src/server.js"] ou ["C:/.../one-node.exe"]),
-// cada teste sobe esse comando como processo filho, com a empresa de teste semeada por KENDJI_SEMENTE_ARQUIVO,
+// Régua de contrato (docs/migracao-rust.md): sem CHATFLOW_SERVIDOR, o servidor sobe em processo (src/api.js).
+// Com CHATFLOW_SERVIDOR (array JSON do comando, ex.: ["node","src/server.js"] ou ["C:/.../one-node.exe"]),
+// cada teste sobe esse comando como processo filho, com a empresa de teste semeada por CHATFLOW_SEMENTE_ARQUIVO,
 // e conversa só por HTTP. Os mesmos testes valem para o JavaScript e para o binário Rust.
-const EXTERNO = process.env.ONE_SERVIDOR ? JSON.parse(process.env.ONE_SERVIDOR) : null;
+const EXTERNO = process.env.CHATFLOW_SERVIDOR ? JSON.parse(process.env.CHATFLOW_SERVIDOR) : null;
 // Testes que só fazem sentido dentro do processo do JavaScript (núcleo, repositório, plataforma, relógio injetado)
 const INTERNO = { skip: EXTERNO ? 'teste interno do JavaScript (fora da régua de contrato HTTP)' : false };
 
@@ -24,7 +24,7 @@ const SEMENTE_PADRAO = [{
   agente: { descricao: 'd', personalidade: '', habilidades: '', produtos: '', restricoes: 'r', editavelPor: { nome: ['cliente', 'integracao'], descricao: ['cliente', 'integracao'], personalidade: ['cliente', 'integracao'], restricoes: ['cliente', 'integracao'] } },
 }];
 
-// Sobe o comando (ONE_SERVIDOR ou `node src/server.js`) como processo filho e espera /saude responder.
+// Sobe o comando (CHATFLOW_SERVIDOR ou `node src/server.js`) como processo filho e espera /saude responder.
 async function lancar(env) {
   const { spawn } = require('node:child_process');
   const net = require('node:net');
@@ -55,11 +55,11 @@ async function subir(opcoes = {}) {
     const arq = require('node:path').join(require('node:os').tmpdir(), `one-semente-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
     fs.writeFileSync(arq, JSON.stringify(semente));
     const env = {
-      KENDJI_TOKEN_CHAT: T.chat, KENDJI_TOKEN_CLIENTE: T.cliente, KENDJI_TOKEN_INTEGRACAO: T.integracao,
-      KENDJI_SEMENTE_ARQUIVO: arq,
-      ...(adminSenha ? { KENDJI_ADMIN_SENHA: adminSenha } : {}),
-      ...(resto.corsOrigens ? { KENDJI_CORS_ORIGENS: resto.corsOrigens.join(',') } : {}),
-      ...(resto.confiarProxy ? { KENDJI_CONFIAR_PROXY: '1' } : {}),
+      CHATFLOW_TOKEN_CHAT: T.chat, CHATFLOW_TOKEN_CLIENTE: T.cliente, CHATFLOW_TOKEN_INTEGRACAO: T.integracao,
+      CHATFLOW_SEMENTE_ARQUIVO: arq,
+      ...(adminSenha ? { CHATFLOW_ADMIN_SENHA: adminSenha } : {}),
+      ...(resto.corsOrigens ? { CHATFLOW_CORS_ORIGENS: resto.corsOrigens.join(',') } : {}),
+      ...(resto.confiarProxy ? { CHATFLOW_CONFIAR_PROXY: '1' } : {}),
     };
     const srv = await lancar(env);
     base = srv.base;
@@ -833,7 +833,7 @@ test('limite: X-Forwarded-For só vale com confiarProxy', async () => {
 
 // Sobe o servidor de verdade (processo filho) e devolve a lista de GET /empresas
 async function empresasDoServidor(extraEnv) {
-  const srv = await lancar({ KENDJI_TOKEN_INTEGRACAO: 'ti-teste', ...extraEnv });
+  const srv = await lancar({ CHATFLOW_TOKEN_INTEGRACAO: 'ti-teste', ...extraEnv });
   try {
     const r = await fetch(`${srv.base}/empresas`, { headers: { Authorization: 'Bearer ti-teste' } });
     assert.strictEqual(r.status, 200);
@@ -841,13 +841,13 @@ async function empresasDoServidor(extraEnv) {
   } finally { srv.fechar(); }
 }
 
-test('server.js sem KENDJI_DEMO começa vazio: GET /empresas devolve []', async () => {
+test('server.js sem CHATFLOW_DEMO começa vazio: GET /empresas devolve []', async () => {
   assert.deepStrictEqual(await empresasDoServidor({}), []);
-  assert.deepStrictEqual(await empresasDoServidor({ KENDJI_DEMO: '0' }), []);
+  assert.deepStrictEqual(await empresasDoServidor({ CHATFLOW_DEMO: '0' }), []);
 });
 
-test('server.js com KENDJI_DEMO=1 cria as 3 empresas de demonstração', async () => {
-  const lista = await empresasDoServidor({ KENDJI_DEMO: '1' });
+test('server.js com CHATFLOW_DEMO=1 cria as 3 empresas de demonstração', async () => {
+  const lista = await empresasDoServidor({ CHATFLOW_DEMO: '1' });
   assert.strictEqual(lista.length, 3);
 });
 
