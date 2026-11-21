@@ -29,7 +29,7 @@ const ESTATICOS: [(&str, &str); 7] = [
     ("bundle.js", "text/javascript; charset=utf-8"),
     ("bundle.css", "text/css; charset=utf-8"),
     ("tokens.css", "text/css; charset=utf-8"),
-    ("logo.png", "image/png"),
+    ("logo-chatflow.png", "image/png"),
 ];
 
 /// Relógio e aleatoriedade do sistema.

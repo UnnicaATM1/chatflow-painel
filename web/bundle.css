@@ -95,16 +95,18 @@
 
 /* Top bar */
 .k1-topbar { background: var(--navy-950); color: #ffffff; display: flex; align-items: center; gap: var(--space-4); padding: 10px 20px; font: 500 14px/20px var(--font-sans); }
-.k1-topbar img { height: 34px; display: block; }
+.k1-topbar img { height: 48px; display: block; margin-bottom: -10px; }
+.k1-brand { display: flex; flex-direction: column; gap: 2px; line-height: 1.1; }
+.k1-brand small { font: 600 12px/1.2 var(--font-sans); letter-spacing: .08em; opacity: .8; align-self: flex-end; padding-right: 6px; }
 .k1-unit { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--navy-700); border-radius: var(--radius-md); padding: 6px 12px; font-weight: 600; font-size: 13px; }
 .k1-unit::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 2px solid var(--brand-500); }
 .k1-modules { display: flex; gap: 2px; }
 .k1-modules a { color: #d5dde6; text-decoration: none; padding: 6px 10px; border-radius: var(--radius-md); border: 1px solid transparent; }
-.k1-modules a[aria-current="page"] { color: var(--brand-500); border-color: rgba(0, 221, 207, .35); background: rgba(0, 221, 207, .1); font-weight: 600; }
+.k1-modules a[aria-current="page"] { color: var(--brand-500); border-color: rgba(255, 149, 80, .4); background: rgba(255, 149, 80, .12); font-weight: 600; }
 .k1-search { flex: 1; max-width: 340px; background: var(--navy-900); border: 1px solid var(--navy-700); border-radius: var(--radius-md); color: #8b98a8; padding: 8px 12px; font-size: 13px; }
 .k1-hello { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 13px; color: #d5dde6; }
 .k1-hello b { color: #ffffff; }
-.k1-avatar { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font: 700 13px/1 var(--font-sans); color: var(--brand-500); background: #063a3a; border: 1px solid rgba(0, 221, 207, .45); }
+.k1-avatar { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font: 700 13px/1 var(--font-sans); color: var(--brand-500); background: #3a1f0e; border: 1px solid rgba(255, 149, 80, .5); }
 
 /* Empty state */
 .k1-empty { border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); padding: 16px; text-align: center; font: 400 13px/18px var(--font-sans); color: var(--ink-muted); background: var(--surface-card); }

@@ -43,7 +43,7 @@
     return h('div', { className: 'pagina', style: { maxWidth: 420, marginTop: 64 } },
       h('div', { className: 'painel' },
         h('form', { className: 'k1-stack', onSubmit: entrar },
-          h('h1', null, 'Entrar no ONE'),
+          h('h1', null, 'Entrar no ChatFlow Painel'),
           h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, 'Seu nome (aparece no histórico)'),
             h('input', { type: 'text', value: nome, maxLength: 60, autoComplete: 'off', onChange: function (e) { setNome(e.target.value); } })),
           h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, 'Chave de acesso'),
@@ -865,7 +865,7 @@
     var nome = (empresas.filter(function (l) { return l.id === empresa; })[0] || {}).nome || '';
     if (empresas.length === 0) {
       return h('div', null,
-        h(K.TopBar, { logoSrc: 'logo.png', unit: '', modules: ['Atendimento', 'Alimentos e Bebidas'], active: 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+        h(K.TopBar, { logoSrc: 'logo-chatflow.png', brandSub: 'Painel', unit: '', modules: ['Atendimento', 'Alimentos e Bebidas'], active: 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
         h('main', { className: 'pagina' },
           h('h1', null, 'Nenhuma empresa'),
           h(K.EmptyState, null, 'Crie a primeira empresa para começar.'),
@@ -878,7 +878,7 @@
     var abaAtual = abas.indexOf(aba) >= 0 ? aba : abas[0];
     var tela = abaAtual === 'Workspace' ? Reservas : abaAtual === 'Mapa de mesas' ? Mapa : abaAtual === 'Configuração' ? Configuracao : abaAtual === 'Histórico' ? Historico : abaAtual === 'API' ? ApiEmpresa : abaAtual === 'Conhecimento' ? Conhecimento : Agentes;
     return h('div', null,
-      h(K.TopBar, { logoSrc: 'logo.png', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Alimentos e Bebidas'] : ['Atendimento'], active: modAtual.reservas && ['Workspace', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Alimentos e Bebidas' : 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+      h(K.TopBar, { logoSrc: 'logo-chatflow.png', brandSub: 'Painel', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Alimentos e Bebidas'] : ['Atendimento'], active: modAtual.reservas && ['Workspace', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Alimentos e Bebidas' : 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
       h(K.Tabs, { items: abas, value: abaAtual, onChange: setAba }),
       h('main', { className: 'pagina' },
         h('div', { className: 'k1-row' }, h('h1', null, abaAtual + ' · ' + nome),

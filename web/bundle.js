@@ -90,7 +90,7 @@
   function TopBar(p) {
     var mods = p.modules || ["Gestão", "Operação", "Atendimento", "Controle", "Pessoas", "Negócio"];
     return h("header", { className: "k1-topbar" },
-      p.logoSrc && h("img", { src: p.logoSrc, alt: "ONE by KendjiOne" }),
+      p.logoSrc && h("span", { className: "k1-brand" }, h("img", { src: p.logoSrc, alt: "ChatFlow" }), p.brandSub && h("small", null, p.brandSub)),
       h("span", { className: "k1-unit" }, p.unit || "Hotel Demonstração"),
       h("nav", { className: "k1-modules" }, mods.map(function (m) { return h("a", { key: m, href: "#", "aria-current": m === p.active ? "page" : undefined }, m); })),
       h("div", { className: "k1-search" }, "Buscar módulo ou submódulo…"),

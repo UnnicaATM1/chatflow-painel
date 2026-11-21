@@ -15,7 +15,7 @@ const ESTATICOS = {
   'bundle.js': 'text/javascript; charset=utf-8',
   'bundle.css': 'text/css; charset=utf-8',
   'tokens.css': 'text/css; charset=utf-8',
-  'logo.png': 'image/png',
+  'logo-chatflow.png': 'image/png',
 };
 
 // Lê o corpo sob demanda (o núcleo só chama depois de autenticar), com o limite da rota. Passou do limite:
