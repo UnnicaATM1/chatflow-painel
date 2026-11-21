@@ -283,19 +283,20 @@ fn demo() -> Vec<Json> {
 async fn main() {
     let plat: Arc<dyn Plataforma> = Arc::new(Nativa);
     // CHATFLOW_HISTORICO_ARQUIVO: grava cada evento de histórico (JSON por linha) neste arquivo, além da memória.
-    let sink: Option<one_store::memoria::Sink> = variavel("CHATFLOW_HISTORICO_ARQUIVO").map(|arq| {
-        let f: one_store::memoria::Sink = Arc::new(move |e: &Json| {
-            let gravado = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&arq)
-                .and_then(|mut f| writeln!(f, "{e}"));
-            if let Err(err) = gravado {
-                eprintln!("falha ao gravar histórico em arquivo: {err}");
-            }
+    let sink: Option<one_store::memoria::Sink> =
+        variavel("CHATFLOW_HISTORICO_ARQUIVO").map(|arq| {
+            let f: one_store::memoria::Sink = Arc::new(move |e: &Json| {
+                let gravado = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&arq)
+                    .and_then(|mut f| writeln!(f, "{e}"));
+                if let Err(err) = gravado {
+                    eprintln!("falha ao gravar histórico em arquivo: {err}");
+                }
+            });
+            f
         });
-        f
-    });
     // CHATFLOW_IDEMPOTENCIA_HORAS (padrão 24) e CHATFLOW_IDEMPOTENCIA_MAX (padrão 10000 por empresa): validade e teto das
     // respostas de idempotência guardadas em memória.
     let ttl_ms = variavel("CHATFLOW_IDEMPOTENCIA_HORAS")
