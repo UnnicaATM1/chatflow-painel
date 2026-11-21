@@ -125,6 +125,15 @@ fn verificar() -> Result<(), i32> {
     if s != 201 || c["status"] != "confirmada" {
         return Err(8);
     }
+    // o reservaId é um código de 8 caracteres do alfabeto sem 0, O, 1, I e L (nunca um contador)
+    let primeiro = c["reservaId"].as_str().unwrap_or("").to_string();
+    if primeiro.len() != 8
+        || !primeiro
+            .bytes()
+            .all(|b| b"23456789ABCDEFGHJKMNPQRSTUVWXYZ".contains(&b))
+    {
+        return Err(8);
+    }
     // a reserva das 23:30 cruza a meia-noite: 00:30 do dia seguinte ainda bate, 01:00 não
     let (s, c) = go(
         "POST",
@@ -153,7 +162,7 @@ fn verificar() -> Result<(), i32> {
         Some(pedido("23:30", "2026-11-20")),
         Some("k1"),
     )?;
-    if s != 201 || c["reservaId"] != 1 {
+    if s != 201 || c["reservaId"] != primeiro.as_str() {
         return Err(11); // a mesma chave de idempotência devolve a mesma reserva
     }
     let (s, c) = go(

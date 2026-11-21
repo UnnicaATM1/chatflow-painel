@@ -209,6 +209,65 @@ test('editar, cancelar e reativar reserva', async () => {
   fechar();
 });
 
+// reservaId (TASK-012): código de 8 caracteres do alfabeto sem 0, O, 1, I e L. O valor é aleatório; a régua só confere o formato.
+const CODIGO_RESERVA = /^[2-9A-HJKMNP-Z]{8}$/;
+
+test('reservaId é um código curto aleatório: formato, idempotência, histórico, desfazer e rotas', async () => {
+  const { f, fechar } = await subir();
+  const post = (chave, extra = {}) => f('/empresas/empresa_1/reservas', { token: T.chat, method: 'POST', body: { ...res, ...extra }, headers: { 'Idempotency-Key': chave } });
+  const a = await (await post('c1')).json();
+  assert.match(a.reservaId, CODIGO_RESERVA);
+  assert.strictEqual(typeof a.reservaId, 'string');
+  const b = await (await post('c2', { horario: '22:00' })).json();
+  assert.match(b.reservaId, CODIGO_RESERVA);
+  assert.notStrictEqual(a.reservaId, b.reservaId);
+  // mesma chave devolve a mesma resposta, com o mesmo código
+  assert.deepStrictEqual(await (await post('c1')).json(), a);
+  // lista, histórico e rotas usam o código; nada de uuid na resposta
+  const lista = await (await f('/empresas/empresa_1/reservas', { token: T.cliente })).json();
+  assert.deepStrictEqual(lista.map((r) => r.id).sort(), [a.reservaId, b.reservaId].sort());
+  assert.ok(lista.every((r) => CODIGO_RESERVA.test(r.id) && r.uuid === undefined));
+  const mapa = await (await f('/empresas/empresa_1/mapa?data=2026-11-20&horario=20:00', { token: T.cliente })).json();
+  assert.strictEqual(mapa[0].mesas[0].reserva.reservaId, a.reservaId);
+  const disponivel = await (await f(`/empresas/empresa_1/disponibilidade?data=2026-11-20&horario=20:00&pessoas=2&ignorar=${a.reservaId}`, { token: T.cliente })).json();
+  assert.deepStrictEqual(disponivel.ambientes[0].mesas.map((m) => m.id), ['S1']);
+  const hist = await (await f('/empresas/empresa_1/historico?entidade=reserva', { token: T.cliente })).json();
+  assert.ok(hist.length >= 2 && hist.every((e) => [a.reservaId, b.reservaId].includes(e.entidadeId)));
+  const cancel = await f(`/empresas/empresa_1/reservas/${a.reservaId}`, { token: T.cliente, method: 'DELETE' });
+  assert.strictEqual(cancel.status, 200);
+  assert.strictEqual((await cancel.json()).reserva.id, a.reservaId);
+  // desfazer o cancelamento pelo código do histórico
+  const ev = (await (await f('/empresas/empresa_1/historico?entidade=reserva', { token: T.cliente })).json()).find((e) => e.entidadeId === a.reservaId && e.acao === 'cancelada');
+  assert.ok(ev);
+  const des = await f(`/empresas/empresa_1/historico/${ev.seq}/desfazer`, { token: T.cliente, method: 'POST' });
+  assert.strictEqual(des.status, 200);
+  assert.strictEqual((await des.json()).reserva.status, 'confirmada');
+  // números e códigos inexistentes: 404
+  for (const ruim of ['1', '999', '22222222', 'abc']) {
+    assert.strictEqual((await f(`/empresas/empresa_1/reservas/${ruim}`, { token: T.cliente, method: 'DELETE' })).status, 404, ruim);
+  }
+  // o código não é reaproveitado depois de cancelar
+  const c = await (await post('c3', { horario: '23:00' })).json();
+  assert.ok(![a.reservaId, b.reservaId].includes(c.reservaId));
+  fechar();
+});
+
+test('a carga de empresas converte IDs numéricos de reservas semeadas em códigos públicos', INTERNO, async (t) => {
+  const semente = [{
+    ...SEMENTE_PADRAO[0],
+    reservas: [
+      { ...res, id: 101, mesaId: 'S1', status: 'confirmada' },
+      { ...res, id: 102, mesaId: 'S1', status: 'cancelada' },
+    ],
+  }];
+  const { f, fechar } = await subir({ semente });
+  t.after(fechar);
+  const lista = await (await f('/empresas/empresa_1/reservas', { token: T.cliente })).json();
+  assert.deepStrictEqual(lista.map((r) => r.status), ['confirmada', 'cancelada']);
+  assert.ok(lista.every((r) => CODIGO_RESERVA.test(r.id) && r.uuid === undefined));
+  assert.strictEqual(new Set(lista.map((r) => r.id)).size, 2);
+});
+
 test('histórico registra quem, quando, antes e depois; desfazer volta o estado', async () => {
   const { f, fechar } = await subir();
   const op = { 'X-Operador': encodeURIComponent('Marina Souza') };
@@ -420,7 +479,7 @@ test('excluir empresa exige a senha do administrador e deixa registro', async ()
   const n1 = await (await f('/empresas/empresa_1/reservas', { token: T.cliente, method: 'POST', body: res, headers: { 'Idempotency-Key': 'y1' } })).json();
   const n2 = await (await f('/empresas/empresa_1/reservas', { token: T.cliente, method: 'POST', body: { ...res, horario: '23:00' }, headers: { 'Idempotency-Key': 'y2' } })).json();
   assert.notStrictEqual(n1.reservaId, n2.reservaId);
-  assert.ok(n1.reservaId > 1);
+  assert.match(n1.reservaId, CODIGO_RESERVA); // código curto, não contador
 
   // o id da empresa excluída não é reaproveitado
   const outra = await (await post('/empresas', { nome: 'Cantina Leste' })).json();

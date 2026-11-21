@@ -136,7 +136,10 @@ impl Empresa {
 /// Reserva. `inicio` e `fim` são minutos absolutos (ver `one-core::tempo`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reserva {
-    pub id: i64,
+    /// Código curto da reserva (8 caracteres): é o `reservaId` que sai pela API.
+    pub id: String,
+    /// UUID v4 interno (chave primária). Nunca sai pela API.
+    pub uuid: String,
     pub empresa_id: String,
     pub mesa_id: String,
     pub ambiente: String,

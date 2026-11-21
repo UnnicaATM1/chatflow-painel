@@ -1,10 +1,10 @@
 //! Repositório em memória (espelha `src/repositorio.js`).
 
 use crate::modelo::{Chave, Empresa, Mesa, Modulos, Reserva};
-use crate::plataforma::{Plataforma, iso_ms, uuid};
+use crate::plataforma::{Plataforma, codigo_curto, codigo_seguinte, iso_ms, uuid};
 use crate::{CriarItem, CriarReserva, Json, Muda, Repositorio};
 use serde_json::Map;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Sumidouro de auditoria: chamado com cada evento de histórico gravado (o adaptador grava em arquivo).
@@ -81,7 +81,8 @@ struct Estado {
     reservas: Vec<Reserva>,
     idempotencia: HashMap<String, Idem>,
     historico: Vec<Json>,
-    seq_reserva: i64,
+    /// Códigos de reserva já emitidos por empresa. Sobrevive a cancelamentos e à exclusão da empresa: nunca reaproveita.
+    codigos: HashMap<String, HashSet<String>>,
     tent_n: u32,
     tent_ate: i64,
 }
@@ -95,8 +96,8 @@ pub struct Memoria {
     estado: Mutex<Estado>,
 }
 
-fn sobrepoe(r: &Reserva, mesa: &str, ini: i64, fim: i64, ignorar: Option<i64>) -> bool {
-    Some(r.id) != ignorar
+fn sobrepoe(r: &Reserva, mesa: &str, ini: i64, fim: i64, ignorar: Option<&str>) -> bool {
+    ignorar != Some(r.id.as_str())
         && r.mesa_id == mesa
         && r.status == "confirmada"
         && ini < r.fim
@@ -104,7 +105,14 @@ fn sobrepoe(r: &Reserva, mesa: &str, ini: i64, fim: i64, ignorar: Option<i64>) -
 }
 
 impl Estado {
-    fn ocupada(&self, empresa: &str, mesa: &str, ini: i64, fim: i64, ignorar: Option<i64>) -> bool {
+    fn ocupada(
+        &self,
+        empresa: &str,
+        mesa: &str,
+        ini: i64,
+        fim: i64,
+        ignorar: Option<&str>,
+    ) -> bool {
         self.reservas
             .iter()
             .any(|r| r.empresa_id == empresa && sobrepoe(r, mesa, ini, fim, ignorar))
@@ -378,7 +386,7 @@ impl Repositorio for Memoria {
             .collect()
     }
 
-    async fn reserva_obter(&self, empresa_id: &str, id: i64) -> Option<Reserva> {
+    async fn reserva_obter(&self, empresa_id: &str, id: &str) -> Option<Reserva> {
         self.est()
             .reservas
             .iter()
@@ -386,12 +394,18 @@ impl Repositorio for Memoria {
             .cloned()
     }
 
-    async fn reserva_confirmadas(&self, empresa_id: &str, ignorar_id: Option<i64>) -> Vec<Reserva> {
+    async fn reserva_confirmadas(
+        &self,
+        empresa_id: &str,
+        ignorar_id: Option<&str>,
+    ) -> Vec<Reserva> {
         self.est()
             .reservas
             .iter()
             .filter(|r| {
-                r.empresa_id == empresa_id && r.status == "confirmada" && Some(r.id) != ignorar_id
+                r.empresa_id == empresa_id
+                    && r.status == "confirmada"
+                    && ignorar_id != Some(r.id.as_str())
             })
             .cloned()
             .collect()
@@ -418,9 +432,27 @@ impl Repositorio for Memoria {
             if est.ocupada(empresa_id, &mesa, nova.inicio, nova.fim, None) {
                 continue;
             }
-            est.seq_reserva += 1;
+            let mut codigo = codigo_curto(self.plat.as_ref());
+            let mut tentativas = 0;
+            while est
+                .codigos
+                .get(empresa_id)
+                .is_some_and(|c| c.contains(&codigo))
+            {
+                tentativas += 1;
+                codigo = if tentativas < 32 {
+                    codigo_curto(self.plat.as_ref())
+                } else {
+                    codigo_seguinte(&codigo)
+                };
+            }
+            est.codigos
+                .entry(empresa_id.to_string())
+                .or_default()
+                .insert(codigo.clone());
             let r = Reserva {
-                id: est.seq_reserva,
+                id: codigo,
+                uuid: uuid(self.plat.as_ref()),
                 empresa_id: empresa_id.to_string(),
                 mesa_id: mesa.clone(),
                 ambiente: ambiente.clone(),
@@ -429,7 +461,7 @@ impl Repositorio for Memoria {
             };
             let mut resp = Map::new();
             resp.insert("status".into(), "confirmada".into());
-            resp.insert("reservaId".into(), r.id.into());
+            resp.insert("reservaId".into(), r.id.clone().into());
             resp.insert("mesa".into(), mesa.into());
             resp.insert("ambiente".into(), ambiente.into());
             let resposta = Json::Object(resp);
@@ -475,7 +507,7 @@ impl Repositorio for Memoria {
     async fn reserva_editar(
         &self,
         empresa_id: &str,
-        id: i64,
+        id: &str,
         dados: Reserva,
         nome_cliente: Option<String>,
         contato: Option<String>,
@@ -513,7 +545,7 @@ impl Repositorio for Memoria {
         Muda::Ok(r.clone())
     }
 
-    async fn reserva_cancelar(&self, empresa_id: &str, id: i64) -> Option<Reserva> {
+    async fn reserva_cancelar(&self, empresa_id: &str, id: &str) -> Option<Reserva> {
         let mut est = self.est();
         let r = est
             .reservas
@@ -523,7 +555,7 @@ impl Repositorio for Memoria {
         Some(r.clone())
     }
 
-    async fn reserva_reativar(&self, empresa_id: &str, id: i64) -> Muda {
+    async fn reserva_reativar(&self, empresa_id: &str, id: &str) -> Muda {
         let mut est = self.est();
         let Some(atual) = est
             .reservas
@@ -846,7 +878,8 @@ mod testes {
 
     fn nova_reserva(inicio: i64) -> Reserva {
         Reserva {
-            id: 0,
+            id: String::new(),
+            uuid: String::new(),
             empresa_id: "e1".into(),
             mesa_id: String::new(),
             ambiente: String::new(),
@@ -859,6 +892,127 @@ mod testes {
             nome_cliente: None,
             contato: None,
         }
+    }
+
+    /// Plataforma que entrega primeiro os sorteios combinados e depois bytes fixos.
+    struct Roteiro {
+        fila: Mutex<VecDeque<Vec<u8>>>,
+    }
+
+    impl Plataforma for Roteiro {
+        fn agora_ms(&self) -> i64 {
+            1_000_000
+        }
+        fn aleatorio(&self, n: usize) -> Vec<u8> {
+            let mut f = self.fila.lock().unwrap();
+            let mut v = f.pop_front().unwrap_or_else(|| vec![5; n]);
+            v.resize(n, 5);
+            v
+        }
+    }
+
+    fn repo_roteiro(sorteios: Vec<u8>) -> Memoria {
+        // o primeiro sorteio é consumido por `Memoria::nova` (identificador de boot)
+        let fila = std::iter::once(9)
+            .chain(sorteios)
+            .map(|b| vec![b; 16])
+            .collect();
+        Memoria::nova(
+            Arc::new(Roteiro {
+                fila: Mutex::new(fila),
+            }),
+            None,
+        )
+    }
+
+    fn criar(m: &Memoria, empresa: &str, inicio: i64) -> Reserva {
+        let cand = vec![("S1".to_string(), "salao".to_string())];
+        let mut nova = nova_reserva(inicio);
+        nova.empresa_id = empresa.into();
+        match bloquear(m.reserva_criar(empresa, None, cand, nova)) {
+            CriarReserva::Criada { reserva, .. } => reserva,
+            _ => panic!("devia criar"),
+        }
+    }
+
+    #[test]
+    fn codigo_tem_8_caracteres_do_alfabeto_e_o_uuid_nunca_sai_na_resposta() {
+        let (m, _) = repo(60_000, 100);
+        let cand = vec![("S1".to_string(), "salao".to_string())];
+        for i in 0..50 {
+            let CriarReserva::Criada { resposta, reserva } =
+                bloquear(m.reserva_criar("e1", None, cand.clone(), nova_reserva(1000 + i * 100)))
+            else {
+                panic!("devia criar")
+            };
+            assert_eq!(reserva.id.len(), 8);
+            assert!(
+                reserva
+                    .id
+                    .bytes()
+                    .all(|b| crate::plataforma::ALFABETO_CODIGO.contains(&b))
+            );
+            assert_eq!(resposta["reservaId"], json!(reserva.id));
+            assert_eq!(reserva.uuid.len(), 36);
+            assert_eq!(&reserva.uuid[14..15], "4");
+            assert!(!resposta.to_string().contains(&reserva.uuid));
+            assert_ne!(reserva.id, reserva.uuid);
+        }
+    }
+
+    #[test]
+    fn codigos_sao_unicos_por_empresa_mesmo_com_plataforma_de_valores_fixos() {
+        let (m, _) = repo(60_000, 100); // aleatorio() devolve sempre os mesmos bytes: só o desempate separa os códigos
+        let mut vistos = std::collections::HashSet::new();
+        for i in 0..200 {
+            assert!(
+                vistos.insert(criar(&m, "e1", 1000 + i * 100).id),
+                "código repetido"
+            );
+        }
+        // outra empresa tem o próprio conjunto: o primeiro sorteio dela pode coincidir com o de e1
+        assert!(vistos.contains(&criar(&m, "e2", 1000).id));
+    }
+
+    #[test]
+    fn colisao_sorteia_de_novo() {
+        // sorteio 1: reserva 1 (código, uuid); 2: reserva 2 repete o código (colide) e sorteia outro
+        let m = repo_roteiro(vec![0, 9, 0, 1, 9]);
+        assert_eq!(criar(&m, "e1", 1000).id, "22222222");
+        assert_eq!(criar(&m, "e1", 2000).id, "33333333");
+    }
+
+    #[test]
+    fn codigo_nao_e_reaproveitado_nem_apos_cancelar_nem_apos_excluir_a_empresa() {
+        let m = repo_roteiro(vec![0, 9, 0, 1, 9, 0, 2, 9]);
+        let r1 = criar(&m, "e1", 1000);
+        assert_eq!(r1.id, "22222222");
+        assert!(bloquear(m.reserva_cancelar("e1", &r1.id)).is_some());
+        assert_eq!(
+            criar(&m, "e1", 2000).id,
+            "33333333",
+            "cancelada ainda ocupa o código"
+        );
+        bloquear(m.empresa_excluir("e1", json!({ "empresaId": "e1", "acao": "excluida" })));
+        assert!(bloquear(m.reserva_obter("e1", "22222222")).is_none());
+        assert_eq!(
+            criar(&m, "e1", 3000).id,
+            "44444444",
+            "excluir a empresa não libera os códigos"
+        );
+    }
+
+    #[test]
+    fn reserva_e_achada_pelo_codigo_e_nunca_pelo_uuid() {
+        let (m, _) = repo(60_000, 100);
+        let r = criar(&m, "e1", 1000);
+        assert!(bloquear(m.reserva_obter("e1", &r.id)).is_some());
+        assert!(bloquear(m.reserva_obter("e1", &r.uuid)).is_none());
+        assert!(
+            bloquear(m.reserva_obter("e2", &r.id)).is_none(),
+            "o código vale só na empresa dela"
+        );
+        assert!(bloquear(m.reserva_obter("e1", "1")).is_none());
     }
 
     #[test]

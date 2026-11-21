@@ -48,12 +48,12 @@ const roteiro = [
   ['POST', '/empresas/empresa_1/reservas', { t: T.chat, raw: '{ruim', h: { 'idempotency-key': 'a9' } }],
   ['GET', '/empresas/empresa_1/reservas', { t: T.cl }], ['GET', '/empresas/empresa_1/reservas?data=2026-11-20', { t: T.cl }],
   ['GET', '/empresas/empresa_1/mapa?data=2026-11-20&horario=20:30', { t: T.cl }], ['GET', '/empresas/empresa_1/mapa?data=2026-11-20', { t: T.cl }],
-  ['PATCH', '/empresas/empresa_1/reservas/1', { t: T.cl, b: { pessoas: 3 } }], ['PATCH', '/empresas/empresa_1/reservas/1', { t: T.cl, b: { horario: '21:00', mesaId: 'S2' } }],
-  ['PATCH', '/empresas/empresa_1/reservas/1', { t: T.cl, b: { pessoas: null } }], ['PATCH', '/empresas/empresa_1/reservas/1', { t: T.cl, b: { data: 'x' } }],
+  ['PATCH', '/empresas/empresa_1/reservas/{R1}', { t: T.cl, b: { pessoas: 3 } }], ['PATCH', '/empresas/empresa_1/reservas/{R1}', { t: T.cl, b: { horario: '21:00', mesaId: 'S2' } }],
+  ['PATCH', '/empresas/empresa_1/reservas/{R1}', { t: T.cl, b: { pessoas: null } }], ['PATCH', '/empresas/empresa_1/reservas/{R1}', { t: T.cl, b: { data: 'x' } }],
   ['PATCH', '/empresas/empresa_1/reservas/99', { t: T.cl, b: { pessoas: 3 } }], ['PATCH', '/empresas/empresa_1/reservas/abc', { t: T.cl, b: { pessoas: 3 } }],
-  ['DELETE', '/empresas/empresa_1/reservas/1', { t: T.cl }], ['PATCH', '/empresas/empresa_1/reservas/1', { t: T.cl, b: { pessoas: 2 } }],
-  ['PATCH', '/empresas/empresa_1/reservas/1', { t: T.cl, b: { status: 'confirmada' }, h: { 'x-operador': 'Mari%C3%A1' } }],
-  ['GET', '/empresas/empresa_1/historico', { t: T.cl }], ['GET', '/empresas/empresa_1/historico?entidade=reserva&id=1&limite=2', { t: T.cl }],
+  ['DELETE', '/empresas/empresa_1/reservas/{R1}', { t: T.cl }], ['PATCH', '/empresas/empresa_1/reservas/{R1}', { t: T.cl, b: { pessoas: 2 } }],
+  ['PATCH', '/empresas/empresa_1/reservas/{R1}', { t: T.cl, b: { status: 'confirmada' }, h: { 'x-operador': 'Mari%C3%A1' } }],
+  ['GET', '/empresas/empresa_1/historico', { t: T.cl }], ['GET', '/empresas/empresa_1/historico?entidade=reserva&id={R1}&limite=2', { t: T.cl }],
   ['POST', '/empresas/empresa_1/historico/6/desfazer', { t: T.cl }], ['POST', '/empresas/empresa_1/historico/6/desfazer', { t: T.cl }], ['POST', '/empresas/empresa_1/historico/xx/desfazer', { t: T.cl }],
   ['POST', '/empresas', { t: T.cl, b: { nome: 'Oficina Sul', modulos: { reservas: false } } }], ['POST', '/empresas', { t: T.cl, b: { nome: 'oficina sul' } }],
   ['POST', '/empresas', { t: T.cl, b: { nome: '' } }], ['POST', '/empresas', { t: T.cl, b: { nome: 'Z', modulos: { x: true } } }], ['POST', '/empresas', { t: T.cl, b: { nome: 'Z', modulos: { reservas: 'sim' } } }],
@@ -88,8 +88,16 @@ const roteiro = [
   ['OPTIONS', '/empresas', { t: null }],
 ];
 
-function normalizar(v) {
-  if (Array.isArray(v)) return v.map(normalizar);
+// reservaId (TASK-012) é um código aleatório de 8 caracteres: o valor difere entre os servidores, só o formato e o papel contam.
+// Cada código novo vira <R1>, <R2>... na ordem em que aparece; o mesmo código nunca vira dois marcadores.
+const CODIGO = /^[2-9A-HJKMNP-Z]{8}$/;
+function normalizar(v, codigos, chave) {
+  if (Array.isArray(v)) return v.map((x) => normalizar(x, codigos, chave));
+  if (typeof v === 'string' && (chave === 'reservaId' || chave === 'id' || chave === 'entidadeId') && CODIGO.test(v)) {
+    if (!codigos.includes(v)) codigos.push(v);
+    return `<R${codigos.indexOf(v) + 1}>`;
+  }
+  if (chave === 'reservaId' && typeof v !== 'object') return `<FORMATO INVÁLIDO: ${JSON.stringify(v)}>`;
   if (v && typeof v === 'object') {
     const o = {};
     for (const [k, x] of Object.entries(v)) {
@@ -97,7 +105,7 @@ function normalizar(v) {
       else if (k === 'quando' || k === 'criadoEm' || k === 'atualizadoEm' || k === 'criadaEm') o[k] = '<data>';
       else if (k === 'chave' && typeof x === 'string' && x.startsWith('k1_')) o[k] = '<chave>';
       else if (k === 'prefixo' && typeof x === 'string' && x.startsWith('k1_')) o[k] = '<prefixo>';
-      else o[k] = normalizar(x);
+      else o[k] = normalizar(x, codigos, k);
     }
     return o;
   }
@@ -106,23 +114,26 @@ function normalizar(v) {
 
 async function rodar(base) {
   const saida = [];
-  for (const [metodo, rota, o = {}] of roteiro) {
+  const codigos = [];
+  for (const [metodo, rotaModelo, o = {}] of roteiro) {
+    const rota = rotaModelo.replace(/\{R(\d+)\}/g, (_, n) => codigos[n - 1] || 'ausente');
     const headers = { ...(o.t ? { Authorization: `Bearer ${o.t}` } : {}), ...(o.b || o.raw ? { 'Content-Type': 'application/json' } : {}), ...(o.h || {}) };
     const r = await fetch(base + rota, { method: metodo, headers, body: o.raw ?? (o.b ? JSON.stringify(o.b) : undefined), redirect: o.manual ? 'manual' : 'follow' });
     const tipo = r.headers.get('content-type') || '';
     let corpo;
     if (o.so) corpo = undefined;
-    else if (tipo.startsWith('application/json')) corpo = normalizar(JSON.parse(await r.text()));
+    else if (tipo.startsWith('application/json')) corpo = normalizar(JSON.parse(await r.text()), codigos, '');
     else corpo = `<${(await r.arrayBuffer()).byteLength} bytes>`;
     const cab = Object.fromEntries((o.ver || []).map((h) => [h, r.headers.get(h)]));
     if (o.so) for (const h of o.so) if (h !== 'status') cab[h] = r.headers.get(h);
-    saida.push({ req: `${metodo} ${rota}`, status: r.status, cab, corpo, ordem: corpo && typeof corpo === 'object' ? JSON.stringify(corpo) : corpo });
+    saida.push({ req: `${metodo} ${rotaModelo}`, status: r.status, cab, corpo, ordem: corpo && typeof corpo === 'object' ? JSON.stringify(corpo) : corpo });
   }
   return saida;
 }
 
 (async () => {
-  const js = await subir([process.execPath, path.join(RAIZ, 'src', 'server.js')]);
+  // CHATFLOW_DIF_A (array JSON do comando) troca o lado "JS": usar o próprio Rust nos dois lados prova que a normalização dos ids é estável.
+  const js = await subir(process.env.CHATFLOW_DIF_A ? JSON.parse(process.env.CHATFLOW_DIF_A) : [process.execPath, path.join(RAIZ, 'src', 'server.js')]);
   const rs = await subir([RUST]);
   try {
     const a = await rodar(js.base);

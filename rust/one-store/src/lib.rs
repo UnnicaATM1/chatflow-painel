@@ -104,12 +104,12 @@ pub trait Repositorio: Send + Sync {
     fn reserva_obter(
         &self,
         empresa_id: &str,
-        id: i64,
+        id: &str,
     ) -> impl Future<Output = Option<Reserva>> + Send;
     fn reserva_confirmadas(
         &self,
         empresa_id: &str,
-        ignorar_id: Option<i64>,
+        ignorar_id: Option<&str>,
     ) -> impl Future<Output = Vec<Reserva>> + Send;
     /// ATÔMICA: reserva a primeira candidata `(mesa, ambiente)` sem sobreposição e guarda a resposta da chave.
     fn reserva_criar(
@@ -136,7 +136,7 @@ pub trait Repositorio: Send + Sync {
     fn reserva_editar(
         &self,
         empresa_id: &str,
-        id: i64,
+        id: &str,
         dados: Reserva,
         nome_cliente: Option<String>,
         contato: Option<String>,
@@ -145,10 +145,10 @@ pub trait Repositorio: Send + Sync {
     fn reserva_cancelar(
         &self,
         empresa_id: &str,
-        id: i64,
+        id: &str,
     ) -> impl Future<Output = Option<Reserva>> + Send;
     /// ATÔMICA: volta a confirmada rechecando a sobreposição.
-    fn reserva_reativar(&self, empresa_id: &str, id: i64) -> impl Future<Output = Muda> + Send;
+    fn reserva_reativar(&self, empresa_id: &str, id: &str) -> impl Future<Output = Muda> + Send;
 
     // ---------- base de conhecimento ----------
     fn conhecimento_listar(&self, empresa_id: &str) -> impl Future<Output = Vec<Json>> + Send;

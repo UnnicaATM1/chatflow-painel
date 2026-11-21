@@ -26,6 +26,47 @@ pub fn uuid(p: &dyn Plataforma) -> String {
     )
 }
 
+/// Alfabeto dos códigos de reserva: sem 0, O, 1, I e L (31 símbolos).
+pub const ALFABETO_CODIGO: &[u8; 31] = b"23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+/// Tamanho do código de reserva.
+pub const TAMANHO_CODIGO: usize = 8;
+
+/// Código curto aleatório (8 caracteres do [`ALFABETO_CODIGO`]), uniforme: bytes >= 248 são descartados
+/// (248 = 31 x 8) para que o resto da divisão por 31 não favoreça os primeiros símbolos.
+pub fn codigo_curto(p: &dyn Plataforma) -> String {
+    let mut saida = String::with_capacity(TAMANHO_CODIGO);
+    for _ in 0..16 {
+        for b in p.aleatorio(TAMANHO_CODIGO * 2) {
+            if b < 248 && saida.len() < TAMANHO_CODIGO {
+                saida.push(ALFABETO_CODIGO[usize::from(b) % 31] as char);
+            }
+        }
+        if saida.len() == TAMANHO_CODIGO {
+            return saida;
+        }
+    }
+    // plataforma degenerada (só bytes rejeitados): completa com o primeiro símbolo para sempre terminar
+    while saida.len() < TAMANHO_CODIGO {
+        saida.push(ALFABETO_CODIGO[0] as char);
+    }
+    saida
+}
+
+/// O código seguinte na ordem do alfabeto (usado só se sorteios seguidos colidirem, p. ex. com uma plataforma de
+/// teste de valores fixos): garante que a geração sempre termina com um código livre.
+pub fn codigo_seguinte(codigo: &str) -> String {
+    let mut b: Vec<u8> = codigo.bytes().collect();
+    for c in b.iter_mut().rev() {
+        let i = ALFABETO_CODIGO.iter().position(|x| x == c).unwrap_or(0);
+        if i + 1 < ALFABETO_CODIGO.len() {
+            *c = ALFABETO_CODIGO[i + 1];
+            return String::from_utf8_lossy(&b).into_owned();
+        }
+        *c = ALFABETO_CODIGO[0];
+    }
+    String::from_utf8_lossy(&b).into_owned()
+}
+
 /// Igual a `new Date(ms).toISOString()`: `2026-11-15T03:25:50.538Z`.
 pub fn iso_ms(ms: i64) -> String {
     let dias = ms.div_euclid(86_400_000);
@@ -80,6 +121,21 @@ mod testes {
         assert_eq!(iso_ms(1_763_177_150_538), "2025-11-15T03:25:50.538Z");
         assert_eq!(iso_ms(951_782_400_000), "2000-02-29T00:00:00.000Z");
         assert_eq!(iso_ms(-1), "1969-12-31T23:59:59.999Z");
+    }
+
+    #[test]
+    fn codigo_curto_tem_8_caracteres_do_alfabeto() {
+        let c = codigo_curto(&Fixa { agora: 0 });
+        assert_eq!(c.len(), 8);
+        assert!(c.bytes().all(|b| ALFABETO_CODIGO.contains(&b)));
+        assert!(!c.contains(['0', 'O', '1', 'I', 'L']));
+    }
+
+    #[test]
+    fn codigo_seguinte_avanca_com_vai_um() {
+        assert_eq!(codigo_seguinte("22222222"), "22222223");
+        assert_eq!(codigo_seguinte("2222222Z"), "22222232");
+        assert_eq!(codigo_seguinte("ZZZZZZZZ"), "22222222");
     }
 
     #[test]

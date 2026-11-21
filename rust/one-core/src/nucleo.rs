@@ -381,7 +381,7 @@ enum Op {
     Editar(Box<Mudancas>),
 }
 
-async fn executar<R: Repositorio>(repo: &R, lid: &str, rid: i64, op: &Op) -> Res<Json> {
+async fn executar<R: Repositorio>(repo: &R, lid: &str, rid: &str, op: &Op) -> Res<Json> {
     match op {
         Op::Cancelar => cancelar_reserva(repo, lid, rid).await,
         Op::Reativar => reativar_reserva(repo, lid, rid).await,
@@ -393,7 +393,7 @@ async fn executar<R: Repositorio>(repo: &R, lid: &str, rid: i64, op: &Op) -> Res
 async fn mudar_reserva<R: Repositorio>(
     repo: &R,
     lid: &str,
-    rid: i64,
+    rid: &str,
     op: Op,
     ator: &Ator,
     extra: Option<(&str, i64)>,
@@ -445,8 +445,8 @@ async fn desfazer<R: Repositorio>(repo: &R, lid: &str, seq: i64, ator: &Ator) ->
     if repo.historico_desfeito(lid, seq).await {
         return erro(409, "este evento já foi desfeito");
     }
-    let rid = ev["entidadeId"].as_i64().unwrap_or(-1);
-    let Some(atual) = repo.reserva_obter(lid, rid).await else {
+    let rid = ev["entidadeId"].as_str().unwrap_or("").to_string();
+    let Some(atual) = repo.reserva_obter(lid, &rid).await else {
         return erro(404, "reserva inexistente");
     };
     let pub_atual = publica(&atual);
@@ -474,7 +474,7 @@ async fn desfazer<R: Repositorio>(repo: &R, lid: &str, seq: i64, ator: &Ator) ->
             ..Mudancas::default()
         }))
     };
-    mudar_reserva(repo, lid, rid, op, ator, Some(("desfeita", seq))).await
+    mudar_reserva(repo, lid, &rid, op, ator, Some(("desfeita", seq))).await
 }
 
 /// Ponto de entrada: sempre devolve uma resposta (erros viram `{ "erro": mensagem }`).
@@ -806,7 +806,7 @@ async fn rotear<R: Repositorio>(
     {
         so_staff(staff)?;
         let lid = dec(p(1).unwrap_or(""))?;
-        let rid = numero_inteiro(p(3).unwrap_or(""));
+        let rid = p(3).filter(|x| !x.is_empty()).map(str::to_string);
         if !modulo_ligado(repo, &lid, "reservas").await {
             return erro(404, "recurso \"reservas\" não habilitado para esta empresa");
         }
@@ -830,7 +830,7 @@ async fn rotear<R: Repositorio>(
                 })),
             }
         };
-        let r = mudar_reserva(repo, &lid, rid, op, &ator, None).await?;
+        let r = mudar_reserva(repo, &lid, &rid, op, &ator, None).await?;
         let status = if m == "DELETE" || r["status"] != "indisponivel" {
             200
         } else {
@@ -1103,7 +1103,7 @@ async fn rotear<R: Repositorio>(
                 "data (AAAA-MM-DD), horario (HH:MM) e pessoas obrigatórios",
             );
         }
-        let ign = numero_inteiro(q("ignorar").unwrap_or("")).filter(|n| *n > 0);
+        let ign = q("ignorar").filter(|x| !x.is_empty());
         return passa(
             cors,
             200,

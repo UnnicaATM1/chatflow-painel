@@ -54,7 +54,7 @@ pub async fn disponibilidade<R: Repositorio>(
     data: &str,
     horario: &str,
     pessoas: Option<i64>,
-    ignorar_id: Option<i64>,
+    ignorar_id: Option<&str>,
 ) -> Res<Json> {
     let l = empresa(repo, empresa_id).await?;
     let Some(pessoas) = pessoas.filter(|p| *p >= 1) else {
@@ -128,7 +128,7 @@ fn filtro(v: Option<&Json>) -> Option<String> {
 
 pub fn publica(r: &Reserva) -> Json {
     let mut o = Map::new();
-    o.insert("id".into(), r.id.into());
+    o.insert("id".into(), r.id.clone().into());
     o.insert("mesaId".into(), r.mesa_id.clone().into());
     o.insert("ambiente".into(), r.ambiente.clone().into());
     o.insert("data".into(), r.data.clone().into());
@@ -186,7 +186,8 @@ pub async fn reservar_detalhado<R: Repositorio>(repo: &R, p: &PedidoReserva) -> 
         ok.sort_by_key(|x| x.mesa.capacidade);
         let ini = minutos_absolutos(&p.data, &p.horario)?;
         let nova = Reserva {
-            id: 0,
+            id: String::new(),
+            uuid: String::new(),
             empresa_id: p.empresa_id.clone(),
             mesa_id: String::new(),
             ambiente: String::new(),
@@ -260,7 +261,7 @@ pub async fn reservar<R: Repositorio>(repo: &R, p: &PedidoReserva) -> Res<Json> 
     Ok(reservar_detalhado(repo, p).await?.resposta)
 }
 
-async fn achar<R: Repositorio>(repo: &R, empresa_id: &str, id: i64) -> Res<Reserva> {
+async fn achar<R: Repositorio>(repo: &R, empresa_id: &str, id: &str) -> Res<Reserva> {
     empresa(repo, empresa_id).await?;
     match repo.reserva_obter(empresa_id, id).await {
         Some(r) => Ok(r),
@@ -274,7 +275,7 @@ async fn indisponivel<R: Repositorio>(
     data: &str,
     horario: &str,
     pessoas: i64,
-    ignorar_id: i64,
+    ignorar_id: &str,
 ) -> Res<Json> {
     let d = disponibilidade(
         repo,
@@ -308,7 +309,7 @@ fn ou(v: Option<&Json>, atual: &str) -> String {
 pub async fn editar_reserva<R: Repositorio>(
     repo: &R,
     empresa_id: &str,
-    id: i64,
+    id: &str,
     m: &Mudancas,
 ) -> Res<Json> {
     let l = empresa(repo, empresa_id).await?;
@@ -329,12 +330,14 @@ pub async fn editar_reserva<R: Repositorio>(
     if !data_ok(&data) || !horario_ok(&horario) {
         return erro(400, "data ou horário inválido");
     }
-    let confirmadas = repo.reserva_confirmadas(empresa_id, Some(r.id)).await;
+    let confirmadas = repo
+        .reserva_confirmadas(empresa_id, Some(r.id.as_str()))
+        .await;
     let Some(alvo) = livres(&l, &confirmadas, &data, &horario, pessoas, None)?
         .into_iter()
         .find(|x| x.mesa.id == mesa_id)
     else {
-        return indisponivel(repo, empresa_id, &data, &horario, pessoas, r.id).await;
+        return indisponivel(repo, empresa_id, &data, &horario, pessoas, &r.id).await;
     };
     let ini = minutos_absolutos(&data, &horario)?;
     let (nome_cliente, contato) = validar_cliente(m.nome_cliente.as_ref(), m.contato.as_ref())?;
@@ -349,15 +352,15 @@ pub async fn editar_reserva<R: Repositorio>(
         ..r.clone()
     };
     match repo
-        .reserva_editar(empresa_id, r.id, dados, nome_cliente, contato)
+        .reserva_editar(empresa_id, &r.id, dados, nome_cliente, contato)
         .await
     {
         Muda::Ok(nova) => Ok(json!({ "status": "atualizada", "reserva": publica(&nova) })),
-        Muda::Conflito => indisponivel(repo, empresa_id, &data, &horario, pessoas, r.id).await,
+        Muda::Conflito => indisponivel(repo, empresa_id, &data, &horario, pessoas, &r.id).await,
     }
 }
 
-pub async fn cancelar_reserva<R: Repositorio>(repo: &R, empresa_id: &str, id: i64) -> Res<Json> {
+pub async fn cancelar_reserva<R: Repositorio>(repo: &R, empresa_id: &str, id: &str) -> Res<Json> {
     achar(repo, empresa_id, id).await?;
     match repo.reserva_cancelar(empresa_id, id).await {
         Some(r) => Ok(json!({ "status": "cancelada", "reserva": publica(&r) })),
@@ -365,18 +368,20 @@ pub async fn cancelar_reserva<R: Repositorio>(repo: &R, empresa_id: &str, id: i6
     }
 }
 
-pub async fn reativar_reserva<R: Repositorio>(repo: &R, empresa_id: &str, id: i64) -> Res<Json> {
+pub async fn reativar_reserva<R: Repositorio>(repo: &R, empresa_id: &str, id: &str) -> Res<Json> {
     let l = empresa(repo, empresa_id).await?;
     let r = achar(repo, empresa_id, id).await?;
     if r.status == "confirmada" {
         return Ok(json!({ "status": "confirmada", "reserva": publica(&r) }));
     }
-    let confirmadas = repo.reserva_confirmadas(empresa_id, Some(r.id)).await;
+    let confirmadas = repo
+        .reserva_confirmadas(empresa_id, Some(r.id.as_str()))
+        .await;
     let livre = livres(&l, &confirmadas, &r.data, &r.horario, r.pessoas, None)?
         .iter()
         .any(|x| x.mesa.id == r.mesa_id);
     if livre && let Muda::Ok(nova) = repo.reserva_reativar(empresa_id, id).await {
         return Ok(json!({ "status": "confirmada", "reserva": publica(&nova) }));
     }
-    indisponivel(repo, empresa_id, &r.data, &r.horario, r.pessoas, r.id).await
+    indisponivel(repo, empresa_id, &r.data, &r.horario, r.pessoas, &r.id).await
 }
