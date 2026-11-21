@@ -108,6 +108,25 @@ Memória do processo Rust (Windows, `tests/carga.js`, 64 conexões):
 O JavaScript tem o mesmo limite e os mesmos testes, mas o RSS dele depende da coleta de lixo do V8 e não mostra a queda com a
 mesma nitidez (15 s: 56 -> 204 MB com o padrão, 56 -> 137 MB com teto de 1000).
 
+**Depois dos códigos curtos de reserva (TASK-012, medido na TASK-014).** O `reservaId` da API virou um código de 8 caracteres
+sorteado por empresa (o uuid fica interno). Duas rodadas de `node tests/carga.js` (15 s, 64 conexões, mesmo computador) contra o
+commit `ac79af8`, com o JavaScript como controle da máquina:
+
+| | Antes (TASK-011) | Depois, rodada 1 | Depois, rodada 2 | JavaScript (controle) |
+|---|---|---|---|---|
+| carga mista | 6297 req/s, p99 24,5 ms | 5709 req/s, p99 30,3 ms | 5819 req/s, p99 33,1 ms | 9153 req/s, p99 14,7 ms |
+| 2000 conexões simultâneas | 2000 de 2000 | 2000 de 2000 | 2000 de 2000 | 2000 de 2000 |
+| recuperação (fase C) | 7130 req/s | 5035 req/s | 6268 req/s | 9398 req/s |
+| memória do processo | 6 -> 102 MB | 6 -> 88 MB | 6 -> 95 MB | 62 -> 211 MB |
+| erros (status 0 ou 500) | 0 | 0 | 0 | 0 |
+
+Leitura: sem erros e a memória não cresceu (ficou igual ou menor). A vazão da carga mista caiu uns 8% a 9% contra os 6297
+req/s de antes (e mais contra os 6,9 mil das primeiras medições; a variação entre rodadas antigas já era de 6,3 a 7,0 mil), com p99
+maior. O controle em JavaScript não ficou mais lento (9,2 mil contra 8,4 mil), então a máquina não explica a queda. **A causa não
+foi isolada**: o sorteio do código e a checagem de unicidade (um `HashSet` por empresa, custo constante) são os suspeitos mais
+óbvios, mas não foi medido com um perfil, nem comparado com um binário do commit anterior. Só duas rodadas de 15 s, em
+computador compartilhado com outros processos: trate a diferença como indício, não como regressão confirmada.
+
 Nota sobre a fase B (conexões simultâneas): neste Windows, 5000 conexões abertas de uma vez às vezes perdem 1 a 3 por esgotamento
 de portas do **cliente** (`EADDRINUSE` por sockets em TIME_WAIT de execuções anteriores; ~15 mil estavam presos). O servidor segue
 vivo e responde depois. Esperando alguns segundos entre execuções, deu 5000 de 5000. `tests/carga.js` agora lista o motivo de cada
