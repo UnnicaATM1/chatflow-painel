@@ -23,8 +23,53 @@ const T = { chat: 'tc', cliente: 'tcl', integracao: 'ti' };
 // cada teste sobe esse comando como processo filho, com a empresa de teste semeada por CHATFLOW_SEMENTE_ARQUIVO,
 // e conversa só por HTTP. Os mesmos testes valem para o JavaScript e para o binário Rust.
 const EXTERNO = process.env.CHATFLOW_SERVIDOR ? JSON.parse(process.env.CHATFLOW_SERVIDOR) : null;
+const WORKER = process.env.CHATFLOW_TESTE_WORKER === '1';
+const WORKER_D1 = WORKER && process.env.CHATFLOW_TESTE_WORKER_D1 === '1';
 // Testes que só fazem sentido dentro do processo do JavaScript (núcleo, repositório, plataforma, relógio injetado)
-const INTERNO = { skip: EXTERNO ? 'teste interno do JavaScript (fora da régua de contrato HTTP)' : false };
+const INTERNO = { skip: EXTERNO || WORKER ? 'teste interno do JavaScript (fora da régua de contrato HTTP)' : false };
+
+const runtimes = new Set();
+test.after(() => Promise.all([...runtimes].map((fechar) => fechar())));
+
+function subirWorker(bindings, { comSemente = true, migrar = true, persistencia } = {}) {
+  const { Miniflare } = require('miniflare');
+  const { join } = require('node:path');
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: join(__dirname, '..', comSemente ? 'node_modules/.cache/chatflow/worker-entry.js' : 'dist/server/index.js'),
+    compatibilityDate: '2025-01-01',
+    bindings,
+    ...(WORKER_D1 && {
+      d1Databases: { DB: 'chatflow' },
+      r2Buckets: { BUCKET: 'chatflow-anexos' },
+      d1Persist: persistencia,
+      r2Persist: persistencia,
+    }),
+  });
+  let fechamento;
+  const fechar = () => {
+    fechamento ??= runtime.dispose().finally(() => runtimes.delete(fechar));
+    return fechamento;
+  };
+  runtimes.add(fechar);
+  const pronto = WORKER_D1 && migrar ? (async () => {
+    const { readFile } = require('node:fs/promises');
+    const pasta = join(__dirname, '..', 'dist/.openai/drizzle');
+    const { entries } = JSON.parse(await readFile(join(pasta, 'meta/_journal.json'), 'utf8'));
+    const db = await runtime.getD1Database('DB');
+    for (const { tag } of entries) {
+      const sql = await readFile(join(pasta, tag + '.sql'), 'utf8');
+      await db.batch(sql.split('--> statement-breakpoint').map((comando) => db.prepare(comando.trim())));
+    }
+  })() : Promise.resolve();
+  return {
+    fetch: async (path, init) => {
+      await pronto;
+      return runtime.dispatchFetch('http://localhost' + path, init);
+    },
+    fechar,
+  };
+}
 
 const FILHOS = new Set();
 process.on('exit', () => { for (const c of FILHOS) { try { c.kill(); } catch { /* já saiu */ } } });
@@ -68,7 +113,20 @@ async function lancar(env) {
 async function subir(opcoes = {}) {
   const { semente = SEMENTE_PADRAO, adminSenha = 'senha-de-teste', ...resto } = opcoes;
   let base, fechar;
-  if (EXTERNO && !resto.agora) {
+  let requisitar = (path, init) => fetch(base + path, init);
+  if (WORKER) {
+    const runtime = subirWorker({
+      CHATFLOW_TOKEN_CLIENTE: T.cliente,
+      CHATFLOW_TOKEN_INTEGRACAO: T.integracao,
+      CHATFLOW_ADMIN_SENHA: adminSenha || '',
+      CHATFLOW_CORS_ORIGENS: resto.corsOrigens?.join(',') || '',
+      CHATFLOW_FUSO: resto.fuso || '',
+      TEST_SEMENTE: JSON.stringify(semente),
+      TEST_CHAVE_EMPRESA: T.chat,
+    });
+    requisitar = runtime.fetch;
+    fechar = runtime.fechar;
+  } else if (EXTERNO && !resto.agora) {
     const fs = require('node:fs');
     const arq = require('node:path').join(require('node:os').tmpdir(), `one-semente-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
     fs.writeFileSync(arq, JSON.stringify(semente));
@@ -92,7 +150,7 @@ async function subir(opcoes = {}) {
     fechar = () => srv.close();
   }
   const f = (path, { token, method = 'GET', body, headers = {}, redirect } = {}) =>
-    fetch(base + path, {
+    requisitar(path, {
       method, redirect,
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
       body: body ? JSON.stringify(body) : undefined,
@@ -109,12 +167,12 @@ test('exige token', async () => {
   fechar();
 });
 
-test('chat lê o bloco inteiro e empresa inexistente dá 404', async () => {
+test('chat lê o bloco inteiro e não acessa empresa inexistente', async () => {
   const { f, fechar } = await subir();
   const r = await f('/empresas/empresa_1/agente', { token: T.chat });
   assert.strictEqual(r.status, 200);
   assert.deepStrictEqual(Object.keys(await r.json()), ['nome', 'descricao', 'personalidade', 'habilidades', 'produtos', 'restricoes']);
-  assert.strictEqual((await f('/empresas/X/agente', { token: T.chat })).status, 404);
+  assert.strictEqual((await f('/empresas/X/agente', { token: T.chat })).status, WORKER ? 403 : 404);
   fechar();
 });
 
@@ -1039,6 +1097,7 @@ test('limite: X-Forwarded-For só vale com confiarProxy', async () => {
   for (let i = 0; i < 20; i++) await a.f('/empresas', { token: 'errada', headers: { 'X-Forwarded-For': `9.9.9.${i}` } });
   assert.strictEqual((await a.f('/empresas', { token: 'errada', headers: { 'X-Forwarded-For': '8.8.8.8' } })).status, 429, 'sem proxy confiável o cabeçalho é ignorado');
   a.fechar();
+  if (WORKER) return; // Workers usam o IP do ingresso Cloudflare. CHATFLOW_CONFIAR_PROXY é do Node.
   const b = await subir({ confiarProxy: true });
   for (let i = 0; i < 20; i++) await b.f('/empresas', { token: 'errada', headers: { 'X-Forwarded-For': '1.1.1.1' } });
   assert.strictEqual((await b.f('/empresas', { token: 'errada', headers: { 'X-Forwarded-For': '1.1.1.1' } })).status, 429);
@@ -1056,15 +1115,131 @@ async function empresasDoServidor(extraEnv) {
   } finally { srv.fechar(); }
 }
 
-test('server.js sem CHATFLOW_DEMO começa vazio: GET /empresas devolve []', async () => {
+test('server.js sem CHATFLOW_DEMO começa vazio: GET /empresas devolve []', { skip: WORKER }, async () => {
   assert.deepStrictEqual(await empresasDoServidor({}), []);
   assert.deepStrictEqual(await empresasDoServidor({ CHATFLOW_DEMO: '0' }), []);
 });
 
-test('server.js com CHATFLOW_DEMO=1 cria as 3 empresas de demonstração', async () => {
+test('server.js com CHATFLOW_DEMO=1 cria as 3 empresas de demonstração', { skip: WORKER }, async () => {
   const lista = await empresasDoServidor({ CHATFLOW_DEMO: '1' });
   assert.strictEqual(lista.length, 3);
 });
+
+if (WORKER) {
+  test('artefato Worker: saúde anônima, login de equipe, painel na mesma origem e chave global desativada', async (t) => {
+    const srv = subirWorker({
+      CHATFLOW_TOKEN_INTEGRACAO: T.integracao,
+      CHATFLOW_TOKEN_CHAT: T.chat,
+      CHATFLOW_DEMO: '1',
+    }, { comSemente: false });
+    t.after(srv.fechar);
+    const saude = await srv.fetch('/saude');
+    assert.strictEqual(saude.status, 200);
+    assert.deepStrictEqual(await saude.json(), { ok: true });
+    for (const authorization of ['', `Bearer ${T.chat}`]) {
+      const negado = await srv.fetch('/empresas', { headers: { authorization } });
+      assert.strictEqual(negado.status, 401);
+      assert.deepStrictEqual(await negado.json(), { erro: 'não autenticado' });
+    }
+    for (const [method, path] of [
+      ['POST', '/empresas'], ['PATCH', '/empresas/empresa_1'], ['POST', '/empresas/empresa_1/excluir'],
+      ['GET', '/empresas/empresa_1/contexto'], ['GET', '/empresas/empresa_1/agente'], ['GET', '/empresas/empresa_1/recursos'],
+      ['GET', '/empresas/empresa_1/disponibilidade'], ['GET', '/empresas/empresa_1/conhecimento'],
+      ['GET', '/empresas/empresa_1/conhecimento/k1/arquivo'], ['POST', '/empresas/empresa_1/reservas'],
+      ['DELETE', '/empresas/empresa_1/reservas/r1?definitivo=1'], ['DELETE', '/empresas/empresa_1/mesas/S1'],
+      ['POST', '/empresas/empresa_1/ambientes'], ['GET', '/empresas/empresa_1/mapa'],
+      ['GET', '/empresas/empresa_1/historico'], ['POST', '/empresas/empresa_1/api/chave'],
+      ['GET', '/rota-inexistente'],
+    ]) {
+      assert.strictEqual((await srv.fetch(path, { method })).status, 401, `${method} ${path}`);
+    }
+    const lista = await srv.fetch('/empresas', { headers: { authorization: `Bearer ${T.integracao}` } });
+    assert.strictEqual(lista.status, 200);
+    assert.deepStrictEqual(await lista.json(), []);
+    const painel = await srv.fetch('/');
+    assert.strictEqual(painel.status, 200);
+    assert.match(await painel.text(), /ChatFlow Painel/);
+    const config = await srv.fetch('/app/config.js');
+    assert.match(await config.text(), /apiBase: ''/);
+  });
+
+  test('Worker sem segredos ainda responde saúde e rejeita API sem chave', async (t) => {
+    const srv = subirWorker({}, { comSemente: false });
+    t.after(srv.fechar);
+    assert.strictEqual((await srv.fetch('/saude')).status, 200);
+    assert.strictEqual((await srv.fetch('/empresas')).status, 401);
+  });
+
+  test('Worker recusa duas reservas simultâneas sobrepostas para a mesma mesa', async (t) => {
+    const { f, fechar } = await subir();
+    t.after(fechar);
+    assert.strictEqual((await f('/saude')).status, 200);
+    const reservar = (chave) => f('/empresas/empresa_1/reservas', {
+      token: T.chat,
+      method: 'POST',
+      body: { ...res, mesaId: 'S1' },
+      headers: { 'Idempotency-Key': chave },
+    });
+    const respostas = await Promise.all([reservar('corrida-1'), reservar('corrida-2')]);
+    assert.deepStrictEqual(respostas.map((resposta) => resposta.status).sort(), [200, 201]);
+    const resultados = await Promise.all(respostas.map((resposta) => resposta.json()));
+    assert.strictEqual(resultados.filter((resultado) => resultado.status === 'confirmada').length, 1);
+    const lista = await f('/empresas/empresa_1/reservas', { token: T.integracao });
+    assert.strictEqual(lista.status, 200);
+    assert.strictEqual((await lista.json()).length, 1);
+  });
+}
+
+if (WORKER_D1) {
+  test('artefato Worker D1: empresa, reserva e anexo do R2 persistem depois de reiniciar o runtime', async (t) => {
+    const { mkdtemp, rm } = require('node:fs/promises');
+    const { tmpdir } = require('node:os');
+    const { join } = require('node:path');
+    const persistencia = await mkdtemp(join(tmpdir(), 'chatflow-worker-'));
+    const ambiente = { CHATFLOW_TOKEN_INTEGRACAO: T.integracao };
+    const headers = { Authorization: `Bearer ${T.integracao}`, 'Content-Type': 'application/json' };
+    let srv = subirWorker(ambiente, { comSemente: false, persistencia });
+    t.after(async () => {
+      await srv.fechar();
+      await rm(persistencia, { recursive: true, force: true });
+    });
+
+    const criar = (path, dados, extras) => srv.fetch(path, {
+      method: 'POST', headers: { ...headers, ...extras }, body: JSON.stringify(dados),
+    });
+    const nova = await criar('/empresas', { nome: 'Persistência' });
+    assert.strictEqual(nova.status, 201);
+    const empresa = await nova.json();
+    const base = `/empresas/${empresa.id}`;
+    const endpoint = base + '/conhecimento';
+    assert.strictEqual((await criar(base + '/ambientes', { nome: 'salao' })).status, 201);
+    const respostaMesa = await criar(base + '/mesas', { ambiente: 'salao', capacidade: 4, reservavel: true });
+    assert.strictEqual(respostaMesa.status, 201);
+    const mesa = await respostaMesa.json();
+    const respostaReserva = await criar(base + '/reservas', { ...res, mesaId: mesa.id }, { 'Idempotency-Key': 'reabertura' });
+    assert.strictEqual(respostaReserva.status, 201);
+    const reserva = await respostaReserva.json();
+    const texto = 'anexo persistente';
+    const anexo = await criar(endpoint, {
+      tipo: 'documento', titulo: 'Arquivo', arquivo: { nome: 'anexo.txt', base64: Buffer.from(texto).toString('base64') },
+    });
+    assert.strictEqual(anexo.status, 201);
+    const item = await anexo.json();
+    await srv.fechar();
+
+    srv = subirWorker(ambiente, { comSemente: false, persistencia, migrar: false });
+    const lista = await srv.fetch('/empresas', { headers });
+    assert.strictEqual((await lista.json())[0].nome, 'Persistência');
+    const reservas = await srv.fetch(base + '/reservas', { headers });
+    assert.strictEqual(reservas.status, 200);
+    assert.deepStrictEqual((await reservas.json()).map(({ id, mesaId, status }) => ({ id, mesaId, status })), [
+      { id: reserva.reservaId, mesaId: mesa.id, status: 'confirmada' },
+    ]);
+    const arquivo = await srv.fetch(`${endpoint}/${item.id}/arquivo`, { headers });
+    assert.strictEqual(arquivo.status, 200);
+    assert.strictEqual(await arquivo.text(), texto);
+  });
+}
 
 test('GET /app sem barra redireciona 301 para /app/ (preservando a query)', async () => {
   const { f, fechar } = await subir();
@@ -1205,6 +1380,15 @@ test('núcleo: plataforma alternativa (crypto.subtle) dá exatamente o mesmo res
   assert.deepStrictEqual(web, noNode);
 });
 
+test('D1: a bateria do núcleo preserva respostas e ordem de chaves da memória', INTERNO, async (t) => {
+  const { abrirD1 } = require('./auxiliar/d1.cjs');
+  const { abrir } = await abrirD1(t);
+  const ctx = nucleoMod.criarContexto({ store: abrir(), tokens: { integracao: 'ti-bat' } });
+  const esperado = await bateria(chamarTratar(ctxCom(plataformaNode())));
+  const d1 = await bateria(chamarTratar(ctx));
+  assert.strictEqual(JSON.stringify(d1), JSON.stringify(esperado));
+});
+
 test('núcleo: a mesma bateria pelo servidor Node (adaptador) devolve a mesma transcrição', INTERNO, async () => {
   const noNucleo = await bateria(chamarTratar(ctxCom(plataformaNode())));
   const s = criarStore();
@@ -1265,8 +1449,17 @@ test('núcleo sem Node: nenhum arquivo de src/ (fora de src/node/) usa require(,
   assert.match(fs.readFileSync(path.join(dir, 'node', 'servidor.js'), 'utf8'), /node:http/);
 });
 
-test('repositório: reservaCriar rechecando a sobreposição devolve conflito e não grava nada', INTERNO, async () => {
-  const s = criarStore();
+function testeRepositorio(nome, verificar) {
+  test(nome, INTERNO, () => verificar(criarStore));
+  test(`D1: ${nome}`, INTERNO, async (t) => {
+    const { abrirD1 } = require('./auxiliar/d1.cjs');
+    const d1 = await abrirD1(t);
+    await verificar(d1.abrir);
+  });
+}
+
+testeRepositorio('repositório: reservaCriar rechecando a sobreposição devolve conflito e não grava nada', async (abrir) => {
+  const s = abrir();
   await addEmpresa(s, { id: 'empresa_1', nome: 'E', ambientes: [{ nome: 'salao', mesas: [{ id: 'S1', capacidade: 4, reservavel: true }] }], agente: {} });
   const entrada = (inicio, chave) => ({ empresaId: 'empresa_1', chave, candidatas: [{ mesaId: 'S1', ambiente: 'salao' }], reserva: { data: '2026-11-20', horario: '20:00', pessoas: 2, inicio, fim: inicio + 90 } });
   const a = await s.reservaCriar(entrada(1000, 'k1'));
@@ -1311,12 +1504,20 @@ test('corpo: documento de conhecimento usa o limite de 6 MiB; as demais rotas, 5
   assert.deepStrictEqual(limites, [512 * 1024, 6 * 1024 * 1024]);
 });
 
-test('corpo: pelo servidor Node, 413 com JSON e no limite certo; sem token a resposta é 401 mesmo com corpo enorme', async () => {
+test('corpo HTTP: 413 com JSON no limite certo; sem token a resposta é 401 mesmo com corpo enorme', async () => {
   const { f, fechar } = await subir();
   const grande = (n) => ({ nome: 'x'.repeat(n) });
   const a = await f('/empresas', { token: T.cliente, method: 'POST', body: grande(600 * 1024) });
   assert.strictEqual(a.status, 413);
   assert.deepStrictEqual(await a.json(), { erro: 'corpo grande demais' });
+  if (WORKER) {
+    const unicode = await f('/empresas', { token: T.cliente, method: 'POST', body: { nome: 'á'.repeat(300 * 1024) } });
+    assert.strictEqual(unicode.status, 413);
+    const arquivoExcessivo = await f('/empresas/empresa_1/conhecimento', {
+      token: T.cliente, method: 'POST', body: { titulo: 'x'.repeat(6 * 1024 * 1024) },
+    });
+    assert.strictEqual(arquivoExcessivo.status, 413);
+  }
   const b = await f('/empresas', { method: 'POST', body: grande(2 * 1024 * 1024) });
   assert.strictEqual(b.status, 401);
   // documento de 5 MB em base64 passa do limite comum, mas cabe no de conhecimento
@@ -1335,9 +1536,9 @@ function plataformaRelogio(relogio) {
   return { ...plataformaNode(), agora: () => relogio.t };
 }
 
-test('idempotência: a resposta expirada some e a chave é esquecida', INTERNO, async () => {
+testeRepositorio('idempotência: a resposta expirada some e a chave é esquecida', async (abrir) => {
   const relogio = { t: 1_000_000 };
-  const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 60_000 });
+  const s = abrir({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 60_000 });
   await addEmpresa(s, { id: 'e1', nome: 'Empresa 1', ambientes: [], agente: {} });
   await s.idempotenciaGravar('e1', 'k1', { status: 'indisponivel', n: 1 });
   relogio.t += 59_999;
@@ -1347,9 +1548,9 @@ test('idempotência: a resposta expirada some e a chave é esquecida', INTERNO, 
   assert.strictEqual(await s.idempotenciaTamanho('e1'), 0, 'a entrada vencida foi apagada');
 });
 
-test('idempotência: gravar varre o que já venceu, sem esperar alguém consultar', INTERNO, async () => {
+testeRepositorio('idempotência: gravar varre o que já venceu, sem esperar alguém consultar', async (abrir) => {
   const relogio = { t: 5_000_000 };
-  const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 1000 });
+  const s = abrir({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 1000 });
   await addEmpresa(s, { id: 'e1', nome: 'Empresa 1', ambientes: [], agente: {} });
   for (let i = 0; i < 50; i++) await s.idempotenciaGravar('e1', `k${i}`, { i });
   relogio.t += 1000;
@@ -1357,9 +1558,9 @@ test('idempotência: gravar varre o que já venceu, sem esperar alguém consulta
   assert.strictEqual(await s.idempotenciaTamanho('e1'), 1, 'só a nova ficou');
 });
 
-test('idempotência: o teto por empresa é respeitado e as mais antigas saem primeiro', INTERNO, async () => {
+testeRepositorio('idempotência: o teto por empresa é respeitado e as mais antigas saem primeiro', async (abrir) => {
   const relogio = { t: 1 };
-  const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaMax: 3 });
+  const s = abrir({ plat: plataformaRelogio(relogio), idempotenciaMax: 3 });
   await addEmpresa(s, { id: 'e1', nome: 'Empresa 1', ambientes: [], agente: {} });
   await addEmpresa(s, { id: 'e2', nome: 'Empresa 2', ambientes: [], agente: {} });
   for (let i = 1; i <= 5; i++) { relogio.t += 10; await s.idempotenciaGravar('e1', `k${i}`, { i }); }
@@ -1376,17 +1577,17 @@ test('idempotência: o teto por empresa é respeitado e as mais antigas saem pri
   assert.strictEqual(await s.idempotenciaObter('e1', 'k4'), null);
 });
 
-test('idempotência: excluir a empresa apaga as respostas guardadas dela', INTERNO, async () => {
-  const s = criarStore();
+testeRepositorio('idempotência: excluir a empresa apaga as respostas guardadas dela', async (abrir) => {
+  const s = abrir();
   await addEmpresa(s, { id: 'e1', nome: 'E', ambientes: [], agente: {} });
   await s.idempotenciaGravar('e1', 'k', { a: 1 });
   await s.empresaExcluir('e1', { empresaId: 'e1', entidade: 'empresa', entidadeId: 'e1', acao: 'excluida', antes: {}, depois: {} });
   assert.strictEqual(await s.idempotenciaTamanho('e1'), 0);
 });
 
-test('idempotência via HTTP: mesma chave dentro da validade devolve a resposta idêntica; vencida, a chave é esquecida', INTERNO, async () => {
+testeRepositorio('idempotência via HTTP: mesma chave dentro da validade devolve a resposta idêntica; vencida, a chave é esquecida', async (abrir) => {
   const relogio = { t: 2_000_000 };
-  const s = criarStore({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 3_600_000 });
+  const s = abrir({ plat: plataformaRelogio(relogio), idempotenciaTtlMs: 3_600_000 });
   await addEmpresa(s, { id: 'empresa_1', nome: 'e', ambientes: [{ nome: 'salao', mesas: [{ id: 'S1', capacidade: 4, reservavel: true }] }], agente: {} });
   const srv = criarServidor(s, T, { agora: () => relogio.t });
   await new Promise((r) => srv.listen(0, r));

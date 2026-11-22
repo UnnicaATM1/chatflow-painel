@@ -7,9 +7,16 @@
     "start": "node src/server.js",
     "backup": "node scripts/backup-sqlite.js",
     "restaurar": "node scripts/restaurar-sqlite.js",
+    "build:worker": "node scripts/build-worker.mjs",
+    "test:worker": "npm run build:worker && node scripts/test-worker.mjs",
+    "test:worker:d1": "npm run build:worker && node scripts/test-worker.mjs --d1",
     "test": "node --test --test-force-exit \"tests/*.test.js\""
   },
   "engines": {
     "node": ">=22.13.0 <23 || >=23.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "miniflare": "4.20260730.0"
   }
 }

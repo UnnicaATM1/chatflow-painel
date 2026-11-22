@@ -1,5 +1,5 @@
 # 🔄 Handoff de Turno — ChatFlow Painel
-> Última atualização: 2026-11-21 — por: Codex
+> Última atualização: 2026-11-22 — por: Codex
 
 ## 📊 Status
 
@@ -10,6 +10,7 @@ frontend: 76%
 backend: 95%
 planejamento-tela-01: 100%
 api-rust: 96%
+worker-sites: 80%
 geral: 76%
 <!-- STATUS_END -->
 
@@ -25,21 +26,21 @@ Regras deste bloco, sempre seguir:
 
 ## 📍 Onde paramos
 
-A Parte A da TASK-002 entregou as rotas de ambientes, mesas e exclusão definitiva de reserva em JS (memória e SQLite) e Rust. O contrato JSON foi enviado ao T04 antes da implementação em Rust.
-Os servidores Node e Rust entregam React e ReactDOM locais em `/app/vendor/` como JavaScript. A régua com o teste dos dois arquivos passou 63/63 em JS com memória e SQLite e 48 testes no binário Rust, com 15 internos do JS pulados.
-A próxima validação é testar os fluxos no painel do T04.
-TASK-001 (Banco de dados, T002): Contrato A entregue em memória e SQLite com as mesmas assinaturas (ambienteRenomear, ambienteRemover, mesaRemover, reservaExcluir; ambienteId = nome). Migração db/migrations/0002_reserva_mesa_nula.sql torna reservas.mesa_id nulo preservando dados; as mutações de reserva revalidam a mesa ao gravar. Testes em tests/contrato-a.test.js.
-TASK-014 reconfirmada: Dockerfile com tini, STOPSIGNAL SIGTERM e prazo de 8 s; SQLite com synchronous=FULL. npm run backup e npm run restaurar copiam o banco e a pasta .arquivos juntos (tests/backup-sqlite.test.js). Build Docker e kill -9 no contêiner seguem para um host com Docker.
+TASK-004: Worker e painel na mesma origem, com D1/R2 integrados e migrações no artefato do Sites. Miniflare validou 42 casos HTTP com D1/R2 e confirmou concorrência sem dupla reserva e persistência de empresa, reserva e anexo após reinício.
+TASK-003 (Banco, T002): Contrato C entregue em src/d1/repositorio.js. criarStoreD1(env) usa env.DB (D1), env.BUCKET (R2 privado) e env.CHATFLOW_FUSO; migrações em src/d1/migrations (0001, 0002_revisao). Atomicidade por revisão global conferida na primeira instrução do batch(), detalhada em docs/atomicidade.md. Testes Miniflare em tests/d1.test.js: pedidos concorrentes sem dupla reserva, falha de auditoria reverte o lote, anexo de 4 MiB no R2. CHATFLOW_TESTE_OPERACAO=1 npm test: 151/151. Lacunas: homologação hospedada, vazão sob contenção da revisão global e conciliação de órfãos do R2.
+O Sites está público e os três segredos esperados estão presentes no runtime (revisão 7). O Worker D1/R2 está preparado para substituir o painel estático.
 
 ## ✅ Pendências ativas
 
+- [ ] TASK-004: publicar o artefato D1/R2 e confirmar saúde 200, erro 401 JSON do ONE, login e persistência no domínio.
+- [ ] Bloqueante antes de clientes reais ou do NicoChat: rotacionar `CHATFLOW_TOKEN_CLIENTE`, `CHATFLOW_TOKEN_INTEGRACAO` e `CHATFLOW_ADMIN_SENHA` para valores fortes e distintos. Com a mesma senha, a credencial da equipe também pode confirmar a exclusão de empresas.
 - [ ] Homologar HTTPS, proxy, volume SQLite, encerramento e recuperação após kill -9 em contêiner e restauração conjunta do banco e dos anexos conforme `docs/publicacao-producao.md`
 - [ ] Definir com o João o objetivo do projeto (app novo, protótipo ou só o design system) e a stack
 - [ ] Conferir tipografia e espaçamento do design system com o front-end real (valores são leituras visuais dos prints)
 - [ ] Validar o plano da tela 01, os breakpoints propostos e as referências ausentes de conversa preenchida, histórico móvel e apagamentos
 - [ ] Após definir stack e escopo, implementar o estado vazio desktop/celular da tela 01 usando `docs/plano-01-atendimento-conversas.md`
 
-- [ ] Validar a migração em D1 local e implementar o adaptador Cloudflare com bucket R2 privado
+- [ ] Homologar no Sites o provisionamento D1/R2, as migrações e o download autorizado após nova publicação
 - [ ] Combinar com a equipe de integração o contrato final da API e a emissão/rotação dos tokens
 - [ ] Revisar premissas 🟡 de `_reversa_sdd/prd.md` (duração 90 min, métricas, LGPD)
 
@@ -61,7 +62,7 @@ TASK-014 reconfirmada: Dockerfile com tini, STOPSIGNAL SIGTERM e prazo de 8 s; S
 
 - [ ] Publicação (decisão do João): o `/sites` só aceita estático ou Worker (ES module com `fetch`), sem processo Node persistente. Para o teste com o NicoChat: API Node em hospedagem que mantém processo ligado (a definir pelo João) e painel `web/` estático no `/sites`. TASK-002 (publicar) BLOQUEADA até o João informar a hospedagem e o endereço; TASK-003 (T01, CONCLUÍDA e validada, 39/39 testes, commits e50ec5b, 36998fd e a639d62): `src/` preparado com package.json, `/saude`, CORS por `CHATFLOW_CORS_ORIGENS`, rate limit, demo só com `CHATFLOW_DEMO=1`, `.env.example`, `config.js` na lista estática e redirect de `/app` para `/app/`; TASK-004 (T02): cotar a portabilidade do ONE para Worker (docs/portabilidade-worker.md). Plano completo em `docs/publicacao-sites.md`
 
-- [ ] Camada Cloudflare do ONE (D1 + R2 + adaptador `fetch`): implementar `src/d1/repositorio.js` com a interface de `src/repositorio.js`, guardar os arquivos do conhecimento no R2, escrever o adaptador `Request`/`Response` sobre `tratar()`, limite de requisições compartilhado e fechar as lacunas de atomicidade (desfazer, mudança de reserva + histórico, bloqueio de senha) listadas em `docs/atomicidade.md`. Confirmar se o Sites aceita ESM como está.
+- [ ] Medir a vazão do D1 sob contenção da revisão global e acompanhar as lacunas documentadas em `docs/atomicidade.md`.
 
 - [ ] Rust (decisão do João: o ONE deve ser todo em Rust; a stack em Node foi escolha minha sem confirmar, o projeto não tinha stack definida): TASK-007 com o T01, fase 1 = só a API em `rust/` (crates one-core, one-store, one-node), guiada por `docs/migracao-rust.md`. Premissas assumidas porque o João não respondeu ao escopo: painel em Rust (Leptos/Dioxus) só na fase 2 com OK dele; o JavaScript atual segue intocado e rodando o teste do NicoChat; a versão Rust só substitui quando passar nos testes de contrato HTTP (os 51 testes de `tests/` viram independentes da implementação). Confirmar com o João: alcance (API só ou API e painel), e se o destino final é o Worker do Sites (workers-rs)
 
@@ -71,6 +72,8 @@ TASK-014 reconfirmada: Dockerfile com tini, STOPSIGNAL SIGTERM e prazo de 8 s; S
 
 ## 🧠 Aprendizados importantes
 
+- O Worker usa os bindings `DB` e `BUCKET` do Sites. Com os dois ausentes, o modo local usa memória. O rate limit continua por isolate com D1.
+- D1 não tem transação interativa: o repositório calcula os efeitos e envia um batch cuja primeira instrução avança uma revisão global só se ela não mudou (CHECK nomeado reverte o lote); em conflito repete até 40 vezes. Limite conhecido: escritas simultâneas de empresas diferentes disputam a mesma revisão.
 - Reserva "ativa" para remover mesa ou ambiente = confirmada com fim maior que agora no relógio de parede da empresa (fuso de negócio). `ambienteId` do Contrato A é o nome do ambiente. A migração 0002 recria a tabela reservas e os gatilhos; novas migrações começam em 0003.
 - O `reservaId` público é um código por empresa. `reservas_codigos` preserva os códigos emitidos após exclusão da empresa. O UUID interno fica fora do HTTP.
 
@@ -126,6 +129,7 @@ TASK-014 reconfirmada: Dockerfile com tini, STOPSIGNAL SIGTERM e prazo de 8 s; S
 
 ## 🚫 Armadilhas conhecidas
 
+- No workerd, responder antes de consumir um corpo recusado pode causar reset HTTP. O Worker descarta sob `waitUntil` com teto e sem armazenar os bytes excedentes.
 - No Windows, os testes do servidor emitem os eventos de sinal por IPC, pois child.kill encerra o processo sem executar o manipulador.
 
 - A revisão alterou a migração inicial. Arquivos criados com o rascunho anterior já marcam user_version=1 e exigem migração própria para receber o esquema revisado preservando dados.
@@ -142,6 +146,7 @@ TASK-014 reconfirmada: Dockerfile com tini, STOPSIGNAL SIGTERM e prazo de 8 s; S
 
 ## 📚 Histórico recente
 
+- 2026-11-22 — TASK-003 (Banco): repositório D1 e anexos no R2 (Contrato C), testes Miniflare com concorrência, 151/151
 - 2026-11-21 — TASK-001 (Banco): Contrato A em memória e SQLite, migração 0002 (mesa_id nulo), TASK-014 reconfirmada, backup e restauração com npm run
 - 2026-11-21 — TASK-013: roteiro de produção, ambiente SQLite explícito e verificação local de persistência após reinício
 - 2026-11-21 — TASK-010: docs de persistência (D1, R2, LGPD, id de reserva), limpeza de idempotência em SQL com testes e revisão do esquema e do repositório SQLite do T04

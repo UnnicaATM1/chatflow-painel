@@ -11,6 +11,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { criarRepositorioSqlite } = require('../src/sqlite/repositorio');
 const { criarRepositorioMemoria } = require('../src/repositorio');
 const { plataformaWeb } = require('../src/plataforma');
+const { abrirD1 } = require('./auxiliar/d1.cjs');
 
 const AGORA = Date.parse('2026-11-21T15:00:00Z'); // 12:00 em São Paulo
 const plat = { ...plataformaWeb(), agora: () => AGORA };
@@ -31,6 +32,11 @@ const base = () => ({
 });
 
 async function criar(modo, t) {
+  if (modo === 'd1') {
+    const store = (await abrirD1(t)).abrir({ plat });
+    await store.empresaCriar(base());
+    return { store };
+  }
   if (modo === 'memoria') {
     const store = criarRepositorioMemoria({ plat });
     await store.empresaCriar(base());
@@ -43,7 +49,7 @@ async function criar(modo, t) {
   return { store };
 }
 
-for (const modo of ['memoria', 'sqlite']) {
+for (const modo of ['memoria', 'sqlite', 'd1']) {
   test(`${modo}: ambienteRenomear valida nome e atualiza as reservas`, async (t) => {
     const { store } = await criar(modo, t);
     assert.deepEqual(await store.ambienteRenomear(E, 'Inexistente', 'X'), { erro: 'nao_encontrado' });

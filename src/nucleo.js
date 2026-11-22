@@ -5,7 +5,7 @@
 //   corpo da resposta: objeto/array (o adaptador serializa como JSON), Uint8Array (binário) ou null.
 //
 // Nada de node:*, Buffer, process ou require aqui: o que depende do ambiente vem em ctx.plat (src/plataforma.js).
-// Adaptadores: src/node/servidor.js (http do Node) e, no futuro, um `fetch` de Worker.
+// Adaptadores: src/node/servidor.js (HTTP do Node) e worker/index.js (Fetch API).
 import { lerConfig, atualizarVarios, empresa } from './agentes.js';
 import { reservarDetalhado, disponibilidade, editarReserva, cancelarReserva, reativarReserva, publica } from './reservas.js';
 import { registrar, diff, listar } from './historico.js';
@@ -53,10 +53,11 @@ function quem(req, papel) {
 
 // Executa a operação sobre a reserva e registra o que mudou (se mudou).
 async function mudarReserva(store, lid, rid, operacao, ator, extra) {
+  if (store.transacao) return store.transacao((tx) => mudarReserva(tx, lid, rid, operacao, ator, extra));
   const achar = () => store.reservaObter(lid, rid);
   const a0 = await achar();
   const antes = a0 ? publica(a0) : null;
-  const r = await operacao();
+  const r = await operacao(store);
   if (r.status === 'indisponivel') return r;
   const d = diff(antes, r.reserva);
   if (Object.keys(d.depois).length) {
@@ -133,7 +134,7 @@ async function desfazer(store, lid, seq, ator) {
       throw Object.assign(new Error('há mudanças posteriores nesta reserva; desfaça na ordem inversa'), { codigo: 409 });
     }
   }
-  const op = () => {
+  const op = (store) => {
     if (ev.acao === 'criada') return cancelarReserva(store, lid, ev.entidadeId);
     if (ev.antes.status === 'cancelada') return cancelarReserva(store, lid, ev.entidadeId);
     if (ev.antes.status === 'confirmada') return reativarReserva(store, lid, ev.entidadeId);
@@ -142,7 +143,33 @@ async function desfazer(store, lid, seq, ator) {
   return mudarReserva(store, lid, ev.entidadeId, op, ator, { acao: 'desfeita', refSeq: seq });
 }
 
+async function criarReservaComHistorico(store, dados, ator) {
+  if (store.transacao) return store.transacao((tx) => criarReservaComHistorico(tx, dados, ator));
+  const det = await reservarDetalhado(store, dados);
+  if (det.criada) {
+    await registrar(store, { empresaId: dados.empresaId, entidade: 'reserva', entidadeId: det.resposta.reservaId,
+      acao: 'criada', ...ator, depois: publica(det.criada) });
+  }
+  return det.resposta;
+}
+
 const PERMISSAO_PADRAO = ['nome', 'descricao', 'personalidade', 'habilidades', 'produtos', 'restricoes'];
+
+async function criarEmpresaComHistorico(store, b, ator) {
+  if (store.transacao) return store.transacao((tx) => criarEmpresaComHistorico(tx, b, ator));
+  const v = await validarNome(store, b.nome);
+  if (v.erro) return [v.codigo, { erro: v.erro }];
+  const vm = validarModulos(b.modulos);
+  if (vm.erro) return [400, { erro: vm.erro }];
+  const id = await store.empresaProximoId();
+  const criada = await addEmpresa(store, {
+    id, nome: v.nome, ambientes: [], modulos: vm.modulos,
+    agente: { nome: '', descricao: '', personalidade: '', habilidades: '', produtos: '', restricoes: '',
+      editavelPor: Object.fromEntries(PERMISSAO_PADRAO.map((c) => [c, ['cliente', 'integracao']])) },
+  });
+  await registrar(store, { empresaId: id, entidade: 'empresa', entidadeId: id, acao: 'criada', ...ator, depois: { nome: v.nome } });
+  return [201, { id, nome: v.nome, modulos: criada.modulos }];
+}
 
 // Valida o nome de uma empresa: 1 a 60 caracteres e único entre as empresas.
 async function validarNome(store, bruto, ignorarId) {
@@ -209,7 +236,9 @@ const CORS_CABECALHOS = 'Authorization, Content-Type, Idempotency-Key, X-Operado
 // limiteInvalidasPorMinuto, limitePorChavePorMinuto, plat }. As contagens de limite ficam na memória do contexto.
 export function criarContexto(opcoes = {}) {
   const { store, tokens } = opcoes;
-  if (!tokens || !Object.values(tokens).some(Boolean)) throw new Error('nenhum token configurado');
+  if (!tokens || (!opcoes.permitirSemTokenEquipe && !Object.values(tokens).some(Boolean))) {
+    throw new Error('nenhum token configurado');
+  }
   const plat = opcoes.plat || store.plat;
   return {
     store, plat, tokens,
@@ -279,17 +308,7 @@ export async function tratar(req, ctx) {
     if (partes[0] === 'empresas' && partes.length === 1 && req.metodo === 'POST') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
       const b = await lerCorpo(req);
-      const v = await validarNome(store, b.nome);
-      if (v.erro) return resp(v.codigo, { erro: v.erro });
-      const vm = validarModulos(b.modulos);
-      if (vm.erro) return resp(400, { erro: vm.erro });
-      const id = await store.empresaProximoId();
-      const criada = await addEmpresa(store, {
-        id, nome: v.nome, ambientes: [], modulos: vm.modulos,
-        agente: { nome: '', descricao: '', personalidade: '', habilidades: '', produtos: '', restricoes: '', editavelPor: Object.fromEntries(PERMISSAO_PADRAO.map((c) => [c, ['cliente', 'integracao']])) },
-      });
-      await registrar(store, { empresaId: id, entidade: 'empresa', entidadeId: id, acao: 'criada', ...quem(req, papel), depois: { nome: v.nome } });
-      return resp(201, { id, nome: v.nome, modulos: criada.modulos });
+      return resp(...await criarEmpresaComHistorico(store, b, quem(req, papel)));
     }
     // Chave de API da empresa (só equipe de integração). A chave aparece uma única vez, ao gerar; só o hash fica guardado.
     if (partes[0] === 'empresas' && partes[2] === 'api' && (partes.length === 3 || (partes.length === 4 && partes[3] === 'chave'))) {
@@ -380,11 +399,11 @@ export async function tratar(req, ctx) {
       if (req.metodo === 'DELETE' && url.searchParams.get('definitivo') === '1') {
         return resp(...await excluirReserva(store, lid, rid, ator));
       }
-      if (req.metodo === 'DELETE') return resp(200, await mudarReserva(store, lid, rid, () => cancelarReserva(store, lid, rid), ator));
+      if (req.metodo === 'DELETE') return resp(200, await mudarReserva(store, lid, rid, (tx) => cancelarReserva(tx, lid, rid), ator));
       const b = await lerCorpo(req);
-      const r = await mudarReserva(store, lid, rid, () => (b.status === 'cancelada' ? cancelarReserva(store, lid, rid)
-        : b.status === 'confirmada' ? reativarReserva(store, lid, rid)
-          : editarReserva(store, lid, rid, { pessoas: b.pessoas, data: b.data, horario: b.horario, mesaId: b.mesaId, nomeCliente: b.nomeCliente, contato: b.contato })), ator);
+      const r = await mudarReserva(store, lid, rid, (tx) => (b.status === 'cancelada' ? cancelarReserva(tx, lid, rid)
+        : b.status === 'confirmada' ? reativarReserva(tx, lid, rid)
+          : editarReserva(tx, lid, rid, { pessoas: b.pessoas, data: b.data, horario: b.horario, mesaId: b.mesaId, nomeCliente: b.nomeCliente, contato: b.contato })), ator);
       return resp(r.status === 'indisponivel' ? 409 : 200, r);
     }
     // POST /empresas/:id/historico/:seq/desfazer
@@ -494,11 +513,8 @@ export async function tratar(req, ctx) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(b.data || '') || !/^\d{2}:\d{2}$/.test(b.horario || '')) {
         return resp(400, { erro: 'data (AAAA-MM-DD) e horario (HH:MM) obrigatórios' });
       }
-      const det = await reservarDetalhado(store, { empresaId, data: b.data, horario: b.horario, pessoas: b.pessoas, ambiente: b.ambiente, mesaId: b.mesaId, chave: String(chave), nomeCliente: b.nomeCliente, contato: b.contato });
-      const r = det.resposta;
-      if (det.criada) {
-        await registrar(store, { empresaId, entidade: 'reserva', entidadeId: r.reservaId, acao: 'criada', ...quem(req, papel), depois: publica(det.criada) });
-      }
+      const r = await criarReservaComHistorico(store, { empresaId, data: b.data, horario: b.horario, pessoas: b.pessoas,
+        ambiente: b.ambiente, mesaId: b.mesaId, chave: String(chave), nomeCliente: b.nomeCliente, contato: b.contato }, quem(req, papel));
       return resp(r.status === 'confirmada' ? 201 : 200, r);
     }
     // Consulta do agente antes de reservar: mesas livres por ambiente

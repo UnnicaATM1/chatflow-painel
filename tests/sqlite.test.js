@@ -16,6 +16,7 @@ const { aplicarMigracoesSqlite } = require('../src/sqlite/migracoes');
 const { criarRepositorioMemoria } = require('../src/repositorio');
 const { plataformaWeb } = require('../src/plataforma');
 const { criarContexto, tratar } = require('../src/nucleo');
+const { abrirD1 } = require('./auxiliar/d1.cjs');
 
 const empresa = {
   id: 'empresa_1',
@@ -28,7 +29,7 @@ const pedido = (chave) => ({
   empresaId: empresa.id, chave, candidatas: [{ mesaId: 'S1', ambiente: 'salão' }], reserva,
 });
 
-for (const modo of ['memoria', 'sqlite']) {
+for (const modo of ['memoria', 'sqlite', 'd1']) {
   test(`${modo}: colisões são sorteadas novamente e códigos emitidos ficam reservados por empresa`, async (t) => {
     const sorteios = [0, 0, 0, 1, 0, 2];
     const plat = {
@@ -39,7 +40,8 @@ for (const modo of ['memoria', 'sqlite']) {
       },
     };
     const disco = modo === 'sqlite' ? arquivoDeTeste(t) : null;
-    let store = disco ? disco.abrir({ plat }) : criarRepositorioMemoria({ plat });
+    const d1 = modo === 'd1' ? await abrirD1(t) : null;
+    let store = (disco || d1)?.abrir({ plat }) || criarRepositorioMemoria({ plat });
     await store.empresaCriar(empresa);
     await store.empresaCriar({ ...empresa, id: 'empresa_2', nome: 'Outra empresa' });
     const primeira = await store.reservaCriar(pedido('primeira'));
@@ -92,6 +94,34 @@ function arquivoDeTeste(t) {
   return { caminho, abrir, fechar, abrirSql };
 }
 
+function testePersistente(nome, verificar) {
+  test(`SQLite: ${nome}`, async (t) => {
+    const disco = arquivoDeTeste(t);
+    await verificar({
+      ...disco,
+      primeiraLinha: (sql) => disco.abrirSql().prepare(sql).get(),
+    });
+  });
+  test(`D1: ${nome}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'chatflow-d1-contrato-'));
+    const opcoes = { d1Persist: dir };
+    let runtime;
+    t.after(async () => {
+      await runtime?.fechar();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    runtime = await abrirD1(t, opcoes);
+    await verificar({
+      abrir: (opcoes) => runtime.abrir(opcoes),
+      primeiraLinha: (sql) => runtime.DB.prepare(sql).first(),
+      fechar: async () => {
+        await runtime.fechar();
+        runtime = await abrirD1(t, opcoes, false);
+      },
+    });
+  });
+}
+
 test('SQLite: várias conexões concorrentes reservam a mesma mesa e só uma vence', async (t) => {
   const { caminho, abrir, fechar } = arquivoDeTeste(t);
   const semente = abrir();
@@ -127,8 +157,7 @@ test('SQLite: várias conexões concorrentes reservam a mesma mesa e só uma ven
   assert.equal(await store.idempotenciaTamanho(empresa.id), 1);
 });
 
-test('SQLite: dados, idempotência e código de reserva sobrevivem ao fechar e reabrir o arquivo', async (t) => {
-  const { abrir, fechar, abrirSql } = arquivoDeTeste(t);
+testePersistente('dados, idempotência e código de reserva sobrevivem ao fechar e reabrir o arquivo', async ({ abrir, fechar, primeiraLinha }) => {
   const primeira = abrir();
   await primeira.empresaCriar(empresa);
   await primeira.agenteAtualizar(empresa.id, { descricao: 'Mudança persistente' });
@@ -147,7 +176,7 @@ test('SQLite: dados, idempotência e código de reserva sobrevivem ao fechar e r
   assert.deepEqual(await segunda.conhecimentoObter(empresa.id, item.id), item);
   assert.deepEqual(await segunda.historicoObter(empresa.id, evento.seq), evento);
   assert.deepEqual(await segunda.tentativasAdminObter(), { n: 5, ate: 2_000_000_000_000 });
-  const linha = abrirSql().prepare('SELECT id, codigo FROM reservas').get();
+  const linha = await primeiraLinha('SELECT id, codigo FROM reservas');
   assert.match(linha.id, /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/);
   assert.equal(linha.codigo, criada.reserva.id);
   assert.ok(!JSON.stringify(criada).includes(linha.id));
@@ -276,8 +305,7 @@ test('SQLite: nome da empresa é único sem diferenciar maiúsculas na criação
   assert.throws(() => db.exec("INSERT INTO empresas (id, nome, agente, modulos) VALUES ('empresa_4', 'CANTINA', '{}', '{}')"), /UNIQUE constraint/);
 });
 
-test('SQLite: JSON do histórico mantém a ordem das chaves do repositório em memória', async (t) => {
-  const { abrir, fechar } = arquivoDeTeste(t);
+testePersistente('JSON do histórico mantém a ordem das chaves do repositório em memória', async ({ abrir, fechar }) => {
   const plat = { ...plataformaWeb(), agora: () => 1_000_000, uuid: () => 'boot-de-teste' };
   const memoria = criarRepositorioMemoria({ plat });
   const store = abrir({ plat });
@@ -294,15 +322,13 @@ test('SQLite: JSON do histórico mantém a ordem das chaves do repositório em m
   assert.equal(JSON.stringify((await reaberto.historicoListar(empresa.id))[0]), esperado);
 });
 
-test('SQLite: tentativas administrativas começam em zero e a primeira gravação cria a linha global', async (t) => {
-  const { abrir, abrirSql } = arquivoDeTeste(t);
+testePersistente('tentativas administrativas começam em zero e a primeira gravação cria a linha global', async ({ abrir, primeiraLinha }) => {
   const store = abrir();
-  const db = abrirSql();
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tentativas_admin').get().n, 0);
+  assert.equal((await primeiraLinha('SELECT COUNT(*) AS n FROM tentativas_admin')).n, 0);
   assert.deepEqual(await store.tentativasAdminObter(), { n: 0, ate: 0 });
   await store.tentativasAdminGravar({ n: 1, ate: 0 });
   await store.tentativasAdminGravar({ n: 5, ate: 1000 });
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tentativas_admin').get().n, 1);
+  assert.equal((await primeiraLinha('SELECT COUNT(*) AS n FROM tentativas_admin')).n, 1);
   assert.deepEqual(await store.tentativasAdminObter(), { n: 5, ate: 1000 });
 });
 

@@ -1,7 +1,6 @@
 # Operações atômicas do repositório (TASK-005)
 
-Hoje o repositório é em memória (`src/repositorio.js`) e o Node roda um pedido de cada vez entre dois `await`, mas o
-contrato foi escrito para o D1 do Sites, onde duas requisições podem chegar ao mesmo tempo. Cada operação abaixo é
+O contrato vale para o repositório em memória (`src/repositorio.js`), o SQLite e o D1 do Sites. Cada operação abaixo é
 **uma função do repositório** que deve ser tudo-ou-nada. No D1, cada uma vira uma transação ou um `batch` de
 instruções com condição (`INSERT ... WHERE NOT EXISTS (...)`, `UPDATE ... WHERE ...`) e confere o número de linhas afetadas.
 
@@ -20,17 +19,37 @@ Regra para quem escrever a versão D1: o serviço (`src/reservas.js` etc.) faz a
 | `empresaExcluir(id, evento)` | Apaga a empresa com tudo (reservas, chaves de idempotência, conhecimento, chave de API) **e** grava o evento de auditoria `excluida` junto: ou os dois acontecem, ou nenhum. | `batch` com os `DELETE` e o `INSERT` do evento; arquivos do R2 apagados depois (limpeza assíncrona tolerante a falha). |
 | `historicoAcrescentar(ev)` | Só acrescenta; `seq` crescente sem buracos nem repetição. | `INSERT` com `seq INTEGER PRIMARY KEY AUTOINCREMENT`; a tabela não tem `UPDATE` nem `DELETE` (gatilho que bloqueia). |
 
+## Contrato C no D1 (TASK-003)
+
+O Worker instancia `criarStoreD1(env)` com `env.DB` (D1), `env.BUCKET` (R2 privado) e `env.CHATFLOW_FUSO`.
+As migrações em `src/d1/migrations/` contêm só schema. A inicial consolida o schema de `db/migrations/0001` e `0002`,
+incluindo `reservas.mesa_id` anulável. A segunda adiciona a revisão persistida.
+
+1. O repositório lê a revisão, consulta o estado confirmado e prepara as mutações. A fachada usada pelo núcleo
+   calcula as respostas a partir desse estado e dos efeitos preparados. As leituras de uma transação observam o
+   estado antes das escritas do lote.
+2. A primeira instrução do `batch()` avança a revisão se ela for a mesma. Um `CHECK` nomeado faz o D1 reverter o
+   lote se houver concorrência. O callback é repetido com o estado atualizado. Chamadas sem mutação conferem a
+   revisão ao terminar. Escritas da aplicação passam pelo repositório. A revisão é global por banco, então a
+   contenção entre empresas também pode causar novas tentativas. Sob contenção persistente, a operação devolve 503.
+3. O SQL de criação, edição e reativação confirma a mesa e o ambiente e testa a sobreposição na própria instrução
+   de escrita. Se a condição não afetar uma linha, o lote é revertido. Os gatilhos do schema também impedem
+   sobreposição. A resposta idempotente e o evento da criação HTTP são gravados junto da reserva. Edição,
+   cancelamento, reativação, exclusão definitiva e desfazer incluem seu histórico no mesmo lote.
+
+Os testes com D1 local via Miniflare exercitam pedidos simultâneos com chaves iguais e distintas, disputa entre
+edição e reativação e falha forçada ao gravar a auditoria. A execução local valida integridade e rollback.
+A vazão e as cotas de consultas sob carga precisam de homologação no ambiente hospedado.
+
+O R2 guarda bytes sob `empresas/<empresa>/conhecimento/<uuid>`. O D1 guarda os metadados e a referência. A API de download
+aplica a autorização por empresa. O objeto novo é enviado antes de publicar a referência. O lote revertido por
+uma restrição confirmada descarta o objeto novo. Versões antigas são descartadas após o commit. Falha de
+transporte com resultado indeterminado, interrupção e falha ao apagar no R2 podem deixar órfãos para conciliação posterior.
+
 ## O que ainda não é uma operação única (e o risco)
 
-- **Desfazer** (`desfazer` em `src/nucleo.js`): lê o evento, confere que não foi desfeito e que a reserva não mudou depois,
-  aplica a operação (`reservaCancelar`, `reservaReativar` ou `reservaEditar`, cada uma atômica) e grava o evento `desfeita`.
-  São passos separados. Em memória, dois "desfazer" simultâneos do mesmo evento são raros e o segundo costuma falhar na
-  conferência de mudanças posteriores. No D1, fechar a lacuna com `UNIQUE (empresa_id, ref_seq) WHERE acao = 'desfeita'`
-  no histórico: o segundo evento falha e o pedido responde 409.
-- **Mudança de reserva + histórico** (`mudarReserva`): a reserva muda e o evento é gravado em seguida. Se o processo cair
-  entre os dois, a mudança existe sem rastro. No D1, juntar os dois em um `batch`.
-- **Resposta "indisponivel" idempotente**: `idempotenciaGravar` é uma gravação à parte (não cria reserva). Duas chamadas
-  simultâneas com a mesma chave podem ambas calcular "indisponivel"; as duas respondem o mesmo conteúdo, então é inofensivo.
+- **Histórico em memória**: as operações e a auditoria são etapas separadas. O núcleo usa a mesma fachada de
+  transação para SQLite e D1 nas rotas de reserva, desfazer, remoção de layout e criação de empresa.
 - **Bloqueio por senha errada do administrador** (`tentativasAdminObter/Gravar`): leitura e gravação separadas; em ambiente
   distribuído pode deixar passar algumas tentativas além de 5. Para o D1/KV, usar incremento atômico.
 - **Limite de requisições**: fica na memória de cada instância. Num Worker cada instância conta separado; para valer de
