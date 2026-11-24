@@ -10,7 +10,7 @@ frontend: 76%
 backend: 95%
 planejamento-tela-01: 100%
 api-rust: 96%
-worker-sites: 80%
+worker-sites: 95%
 geral: 76%
 <!-- STATUS_END -->
 
@@ -28,11 +28,11 @@ Regras deste bloco, sempre seguir:
 
 TASK-004: Worker e painel na mesma origem, com D1/R2 integrados e migrações no artefato do Sites. Miniflare validou 42 casos HTTP com D1/R2 e confirmou concorrência sem dupla reserva e persistência de empresa, reserva e anexo após reinício.
 TASK-003 (Banco, T002): Contrato C entregue em src/d1/repositorio.js. criarStoreD1(env) usa env.DB (D1), env.BUCKET (R2 privado) e env.CHATFLOW_FUSO; migrações em src/d1/migrations (0001, 0002_revisao). Atomicidade por revisão global conferida na primeira instrução do batch(), detalhada em docs/atomicidade.md. Testes Miniflare em tests/d1.test.js: pedidos concorrentes sem dupla reserva, falha de auditoria reverte o lote, anexo de 4 MiB no R2. CHATFLOW_TESTE_OPERACAO=1 npm test: 151/151. Lacunas: homologação hospedada, vazão sob contenção da revisão global e conciliação de órfãos do R2.
-O Sites está público e os três segredos esperados estão presentes no runtime (revisão 7). O Worker D1/R2 está preparado para substituir o painel estático.
+O Worker D1/R2 foi publicado no Sites público (versão 3, commit ca140c91836fa06a96ba1ceebcce8de2d0dd2740, runtime revisão 7). Acesso anônimo confirmado: `/saude` 200 JSON, `/empresas` 401 JSON do ONE e `/app/` 200.
 
 ## ✅ Pendências ativas
 
-- [ ] TASK-004: publicar o artefato D1/R2 e confirmar saúde 200, erro 401 JSON do ONE, login e persistência no domínio.
+- [ ] TASK-004: validar login com João no domínio e testar criação, reabertura e limpeza de uma empresa e reserva de homologação.
 - [ ] Bloqueante antes de clientes reais ou do NicoChat: rotacionar `CHATFLOW_TOKEN_CLIENTE`, `CHATFLOW_TOKEN_INTEGRACAO` e `CHATFLOW_ADMIN_SENHA` para valores fortes e distintos. Com a mesma senha, a credencial da equipe também pode confirmar a exclusão de empresas.
 - [ ] Homologar HTTPS, proxy, volume SQLite, encerramento e recuperação após kill -9 em contêiner e restauração conjunta do banco e dos anexos conforme `docs/publicacao-producao.md`
 - [ ] Definir com o João o objetivo do projeto (app novo, protótipo ou só o design system) e a stack
@@ -40,7 +40,7 @@ O Sites está público e os três segredos esperados estão presentes no runtime
 - [ ] Validar o plano da tela 01, os breakpoints propostos e as referências ausentes de conversa preenchida, histórico móvel e apagamentos
 - [ ] Após definir stack e escopo, implementar o estado vazio desktop/celular da tela 01 usando `docs/plano-01-atendimento-conversas.md`
 
-- [ ] Homologar no Sites o provisionamento D1/R2, as migrações e o download autorizado após nova publicação
+- [ ] Validar escrita no R2 e download autorizado de anexo no Sites publicado. O binding D1 e as tabelas migradas foram confirmados pelo plugin.
 - [ ] Combinar com a equipe de integração o contrato final da API e a emissão/rotação dos tokens
 - [ ] Revisar premissas 🟡 de `_reversa_sdd/prd.md` (duração 90 min, métricas, LGPD)
 
