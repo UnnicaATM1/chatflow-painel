@@ -926,6 +926,14 @@
     var sl = useState(null), empresas = sl[0], setEmpresas = sl[1];
     var sa = useState(null), empresa = sa[0], setEmpresa = sa[1];
     var sb = useState('Workspace'), aba = sb[0], setAba = sb[1];
+    var si = useState(false), superadmin = si[0], setSuperadmin = si[1]; // só a chave de integração enxerga a aba API
+    useEffect(function () {
+      setSuperadmin(false);
+      if (!token || !empresa) return;
+      var vivo = true;
+      api(token, 'GET', '/empresas/' + encodeURIComponent(empresa) + '/api').then(function () { if (vivo) setSuperadmin(true); }).catch(function () { if (vivo) setSuperadmin(false); });
+      return function () { vivo = false; };
+    }, [token, empresa]);
     useEffect(function () {
       if (!token) return;
       api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(function (a) { return a || (l[0] && l[0].id); }); })
@@ -946,7 +954,7 @@
             h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); } }, 'Sair'))));
     }
     var modAtual = (empresas.filter(function (l) { return l.id === empresa; })[0] || {}).modulos || { reservas: true, conhecimento: true };
-    var abas = [].concat(modAtual.reservas ? ['Workspace', 'Mapa de mesas'] : [], ['Configuração', 'Agentes'], modAtual.conhecimento ? ['Conhecimento'] : [], ['API', 'Histórico']);
+    var abas = [].concat(modAtual.reservas ? ['Workspace', 'Mapa de mesas'] : [], ['Configuração', 'Agentes'], modAtual.conhecimento ? ['Conhecimento'] : [], superadmin ? ['API', 'Histórico'] : []);
     var abaAtual = abas.indexOf(aba) >= 0 ? aba : abas[0];
     var tela = abaAtual === 'Workspace' ? Reservas : abaAtual === 'Mapa de mesas' ? Mapa : abaAtual === 'Configuração' ? Configuracao : abaAtual === 'Histórico' ? Historico : abaAtual === 'API' ? ApiEmpresa : abaAtual === 'Conhecimento' ? Conhecimento : Agentes;
     return h('div', null,
