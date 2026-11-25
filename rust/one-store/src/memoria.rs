@@ -1,6 +1,6 @@
 //! Repositório em memória (espelha `src/repositorio.js`).
 
-use crate::modelo::{Ambiente, Chave, Empresa, Mesa, Modulos, Reserva};
+use crate::modelo::{Ambiente, Chave, Credencial, Empresa, Mesa, Modulos, Reserva, Sessao, Usuario};
 use crate::plataforma::{Plataforma, codigo_curto, codigo_seguinte, iso_ms, uuid};
 use crate::{
     CriarItem, CriarReserva, ExcluirReserva, Json, Muda, RemoverLayout, RenomearAmbiente,
@@ -88,6 +88,8 @@ struct Estado {
     codigos: HashMap<String, HashSet<String>>,
     tent_n: u32,
     tent_ate: i64,
+    usuarios: Vec<Usuario>,
+    sessoes: HashMap<String, Sessao>,
 }
 
 pub struct Memoria {
@@ -883,7 +885,116 @@ impl Repositorio for Memoria {
         est.conhecimento.remove(id);
         est.reservas.retain(|r| r.empresa_id != id);
         est.idempotencia.remove(id);
+        for u in &mut est.usuarios {
+            u.empresas.retain(|e| e != id);
+        }
         self.acrescentar(&mut est, &evento)
+    }
+
+    async fn usuario_criar(&self, mut u: Usuario) -> Result<Usuario, ()> {
+        let mut est = self.est();
+        if est.usuarios.iter().any(|x| x.email == u.email) {
+            return Err(());
+        }
+        let existentes: Vec<String> = est.empresas.iter().map(|e| e.id.clone()).collect();
+        u.empresas.retain(|e| existentes.contains(e));
+        u.empresas.sort();
+        u.empresas.dedup();
+        est.usuarios.push(u.clone());
+        Ok(u)
+    }
+
+    async fn usuario_por_email(&self, email: &str) -> Option<Usuario> {
+        self.est().usuarios.iter().find(|u| u.email == email).cloned()
+    }
+
+    async fn usuario_obter(&self, id: &str) -> Option<Usuario> {
+        self.est().usuarios.iter().find(|u| u.id == id).cloned()
+    }
+
+    async fn usuario_listar(&self) -> Vec<Usuario> {
+        self.est().usuarios.clone()
+    }
+
+    async fn usuario_atualizar(
+        &self,
+        id: &str,
+        nome: Option<String>,
+        papel: Option<String>,
+        ativo: Option<bool>,
+        empresas: Option<Vec<String>>,
+    ) -> Option<Usuario> {
+        let mut est = self.est();
+        let existentes: Vec<String> = est.empresas.iter().map(|e| e.id.clone()).collect();
+        let u = est.usuarios.iter_mut().find(|u| u.id == id)?;
+        if let Some(n) = nome {
+            u.nome = n;
+        }
+        if let Some(p) = papel {
+            u.papel = p;
+        }
+        if let Some(a) = ativo {
+            u.ativo = a;
+        }
+        if let Some(mut e) = empresas {
+            e.retain(|x| existentes.contains(x));
+            e.sort();
+            e.dedup();
+            u.empresas = e;
+        }
+        Some(u.clone())
+    }
+
+    async fn usuario_senha_definir(&self, id: &str, c: Credencial) -> bool {
+        let mut est = self.est();
+        match est.usuarios.iter_mut().find(|u| u.id == id) {
+            Some(u) => {
+                u.senha_hash = c.senha_hash;
+                u.salt = c.salt;
+                u.iteracoes = c.iteracoes;
+                true
+            }
+            None => false,
+        }
+    }
+
+    async fn usuario_login_marcar(&self, id: &str, quando: &str) {
+        if let Some(u) = self.est().usuarios.iter_mut().find(|u| u.id == id) {
+            u.ultimo_login = Some(quando.to_string());
+        }
+    }
+
+    async fn usuario_superadmins_ativos(&self) -> Vec<String> {
+        self.est()
+            .usuarios
+            .iter()
+            .filter(|u| u.papel == "superadmin" && u.ativo)
+            .map(|u| u.id.clone())
+            .collect()
+    }
+
+    async fn sessao_criar(&self, hash: &str, s: Sessao) {
+        self.est().sessoes.insert(hash.to_string(), s);
+    }
+
+    async fn sessao_por_hash(&self, hash: &str) -> Option<Sessao> {
+        self.est().sessoes.get(hash).cloned()
+    }
+
+    async fn sessao_reautenticar(&self, hash: &str, quando: &str) {
+        if let Some(s) = self.est().sessoes.get_mut(hash) {
+            s.reautenticado_em = Some(quando.to_string());
+        }
+    }
+
+    async fn sessao_remover(&self, hash: &str) {
+        self.est().sessoes.remove(hash);
+    }
+
+    async fn sessoes_remover_do_usuario(&self, usuario_id: &str, exceto: Option<&str>) {
+        self.est()
+            .sessoes
+            .retain(|h, s| s.usuario_id != usuario_id || Some(h.as_str()) == exceto);
     }
 
     async fn tentativas_admin_obter(&self) -> (u32, i64) {

@@ -15,6 +15,7 @@ import * as conhecimento from './conhecimento.js';
 import { contexto, recursosDe } from './contexto.js';
 import { fusoDe } from './tempo.js';
 import { codigoReservaValido } from './plataforma.js';
+import { conferirSenha, criarCredencial, ehAdmin, ehSuperadmin, normalizarEmail, validarNovoUsuario, validarSenhaNova, PAPEIS_USUARIO } from './usuarios.js';
 
 export const LIMITE_CORPO = 512 * 1024; // 5 campos de texto somam até ~49 mil caracteres
 export const LIMITE_CORPO_ARQUIVO = 6 * 1024 * 1024; // documento de até 4 MB em base64
@@ -40,12 +41,27 @@ async function autenticar(req, ctx) {
   for (const papel of Object.keys(tokens)) {
     if (tokens[papel] && plat.iguaisTempoConstante(m[1], tokens[papel])) return { papel };
   }
+  // Sessão de usuário (token "s1_…"): papel, nome e empresas vêm do servidor, nunca do cliente.
+  if (m[1].startsWith('s1_') && store.sessaoPorHash) {
+    const hash = await plat.sha256Hex(m[1]);
+    const s = await store.sessaoPorHash(hash);
+    if (s && Date.parse(s.expiraEm) > ctx.agora()) {
+      const u = await store.usuarioObter(s.usuarioId);
+      if (u && u.ativo) {
+        return { papel: u.papel, sessaoHash: hash, reautenticadoEm: s.reautenticadoEm,
+          usuario: { id: u.id, nome: u.nome, email: u.email, empresas: u.empresas } };
+      }
+    }
+    return null;
+  }
   const id = await store.empresaPorChaveHash(await plat.sha256Hex(m[1]));
   return id ? { papel: 'chat', empresaEscopo: id } : null;
 }
 
 // Quem fez: papel do token (confiável) + operador informado no cabeçalho X-Operador (rótulo, não prova de identidade).
-function quem(req, papel) {
+function quem(req, papel, auth) {
+  // Usuário logado: nome e id vêm da sessão; o cabeçalho X-Operador é ignorado (ninguém se passa por outro).
+  if (auth && auth.usuario) return { papel, operador: auth.usuario.nome, usuarioId: auth.usuario.id, usuarioNome: auth.usuario.nome };
   let operador = '';
   try { operador = decodeURIComponent(req.headers['x-operador'] || ''); } catch { operador = ''; }
   return { papel, operador: operador.trim().slice(0, 60) || null };
@@ -205,6 +221,8 @@ function validarModulos(b) {
 
 // Limite de requisições em memória (janela fixa de 1 minuto).
 const JANELA_MS = 60 * 1000;
+const SESSAO_MS = 12 * 60 * 60 * 1000; // validade da sessão de usuário
+const REAUTENTICACAO_MS = 5 * 60 * 1000; // quanto tempo a reautenticação vale
 function criarLimitador(maximo) {
   const baldes = new Map(); // chave -> { inicio, n }
   return {
@@ -249,6 +267,7 @@ export function criarContexto(opcoes = {}) {
     agora: opcoes.agora || (() => plat.agora()),
     limiteInvalidas: criarLimitador(opcoes.limiteInvalidasPorMinuto || 20), // por IP, chave inválida ou ausente
     limiteValidas: criarLimitador(opcoes.limitePorChavePorMinuto || 300), // por chave válida
+    limiteLogin: criarLimitador(opcoes.limiteLoginPorMinuto || 10), // tentativas de login por e-mail e por IP
   };
 }
 
@@ -280,6 +299,25 @@ export async function tratar(req, ctx) {
     if (req.metodo === 'OPTIONS') return resp(204, null);
     // GET /saude: sem autenticação, só { ok: true }
     if (req.metodo === 'GET' && req.url.split('?')[0] === '/saude') return resp(200, { ok: true });
+    // POST /login { email, senha }: sem autenticação prévia; resposta sempre genérica para falha
+    if (req.metodo === 'POST' && req.url.split('?')[0] === '/login') {
+      const b = await lerCorpo(req);
+      const email = normalizarEmail(b.email);
+      const ip = ipDe(req, ctx.confiarProxy);
+      const lim = ctx.limiteLogin.contar('ip:' + ip, ctx.agora());
+      const lim2 = ctx.limiteLogin.contar('email:' + email, ctx.agora());
+      if (!lim.ok || !lim2.ok) return resp(429, { erro: 'muitas tentativas; tente novamente em instantes' }, { 'Retry-After': String((lim.ok ? lim2 : lim).retryAfter) });
+      const u = email && typeof b.senha === 'string' ? await store.usuarioPorEmail(email) : null;
+      // Sem usuário, ainda gasta o mesmo tempo de derivação para não revelar se o e-mail existe.
+      const credencialFalsa = u ? null : { salt: '00'.repeat(16), iteracoes: 100000, senhaHash: '0'.repeat(64) };
+      const ok = await conferirSenha(b.senha, u || credencialFalsa, plat.iguaisTempoConstante);
+      if (!u || !ok || !u.ativo) return resp(401, { erro: 'e-mail ou senha inválidos' });
+      const token = 's1_' + plat.aleatorio(32);
+      const agoraMs = ctx.agora();
+      await store.sessaoCriar({ tokenHash: await plat.sha256Hex(token), usuarioId: u.id, criadaEm: new Date(agoraMs).toISOString(), expiraEm: new Date(agoraMs + SESSAO_MS).toISOString() });
+      await store.usuarioLoginMarcar(u.id, new Date(agoraMs).toISOString());
+      return resp(200, { token, usuario: { id: u.id, nome: u.nome, email: u.email, papel: u.papel, empresas: u.empresas } });
+    }
     const auth = await autenticar(req, ctx);
     const limite = auth
       ? ctx.limiteValidas.contar(await hashChave(req.headers.authorization), ctx.agora())
@@ -290,15 +328,114 @@ export async function tratar(req, ctx) {
 
     const url = new URL(req.url, 'http://x');
     const partes = url.pathname.split('/').filter(Boolean); // empresas/:id/<recurso>
-    const staff = papel === 'cliente' || papel === 'integracao';
+    const staff = papel === 'cliente' || papel === 'integracao' || PAPEIS_USUARIO.includes(papel);
+    const base = ehSuperadmin(papel) ? 'integracao' : 'cliente'; // papel legado das regras de edição do agente
+    const doUsuario = Boolean(auth.usuario);
+    const superadmin = ehSuperadmin(papel);
+    // Usuário que não é superadmin só enxerga as empresas liberadas para ele.
+    if (doUsuario && !superadmin && partes[0] === 'empresas' && partes[1] && !auth.usuario.empresas.includes(decodeURIComponent(partes[1]))) {
+      return resp(403, { erro: 'empresa não liberada' });
+    }
+    // Configuração sensível: equipe e admin reautenticam com a própria senha (vale 5 min); superadmin e tokens do env dispensam.
+    const reautenticado = !doUsuario || superadmin || (auth.reautenticadoEm && ctx.agora() - Date.parse(auth.reautenticadoEm) <= REAUTENTICACAO_MS);
+    const exigirReautenticacao = () => resp(403, { erro: 'digite novamente a sua senha para continuar', reautenticar: true });
     // chave de API de uma empresa só alcança as rotas dessa empresa
     if (auth.empresaEscopo && !(partes[0] === 'empresas' && partes[1] && decodeURIComponent(partes[1]) === auth.empresaEscopo)) {
       return resp(403, { erro: 'esta chave só acessa a própria empresa' });
     }
 
+    // ---------- sessão do usuário ----------
+    // POST /logout: encerra a sessão atual
+    if (partes[0] === 'logout' && partes.length === 1 && req.metodo === 'POST') {
+      if (auth.sessaoHash) await store.sessaoRemover(auth.sessaoHash);
+      return resp(200, { ok: true });
+    }
+    // GET /eu: quem sou eu (o painel decide as abas por aqui); token do env responde só com o papel
+    if (partes[0] === 'eu' && partes.length === 1 && req.metodo === 'GET') {
+      if (auth.empresaEscopo) return resp(403, { erro: 'sem permissão' });
+      return resp(200, doUsuario
+        ? { id: auth.usuario.id, nome: auth.usuario.nome, email: auth.usuario.email, papel, empresas: auth.usuario.empresas, reautenticadoEm: auth.reautenticadoEm || null }
+        : { id: null, nome: null, email: null, papel, empresas: null, reautenticadoEm: null });
+    }
+    // POST /eu/reautenticar { senha }
+    if (partes[0] === 'eu' && partes[1] === 'reautenticar' && partes.length === 2 && req.metodo === 'POST') {
+      if (!doUsuario) return resp(403, { erro: 'somente usuários com login reautenticam' });
+      const lim = ctx.limiteLogin.contar('email:' + auth.usuario.email, ctx.agora());
+      if (!lim.ok) return resp(429, { erro: 'muitas tentativas; tente novamente em instantes' }, { 'Retry-After': String(lim.retryAfter) });
+      const b = await lerCorpo(req);
+      if (typeof b.senha !== 'string' || !(await conferirSenha(b.senha, await store.usuarioObter(auth.usuario.id), plat.iguaisTempoConstante))) return resp(403, { erro: 'senha incorreta' });
+      await store.sessaoReautenticar(auth.sessaoHash, new Date(ctx.agora()).toISOString());
+      return resp(200, { ok: true });
+    }
+    // POST /eu/senha { atual, nova }: troca a própria senha e encerra as outras sessões
+    if (partes[0] === 'eu' && partes[1] === 'senha' && partes.length === 2 && req.metodo === 'POST') {
+      if (!doUsuario) return resp(403, { erro: 'somente usuários com login trocam a senha' });
+      const lim = ctx.limiteLogin.contar('email:' + auth.usuario.email, ctx.agora());
+      if (!lim.ok) return resp(429, { erro: 'muitas tentativas; tente novamente em instantes' }, { 'Retry-After': String(lim.retryAfter) });
+      const b = await lerCorpo(req);
+      const erroSenha = validarSenhaNova(b.nova);
+      if (erroSenha) return resp(400, { erro: erroSenha });
+      if (typeof b.atual !== 'string' || !(await conferirSenha(b.atual, await store.usuarioObter(auth.usuario.id), plat.iguaisTempoConstante))) return resp(403, { erro: 'senha atual incorreta' });
+      await store.usuarioSenhaDefinir(auth.usuario.id, await criarCredencial(b.nova));
+      await store.sessoesRemoverDoUsuario(auth.usuario.id, auth.sessaoHash);
+      return resp(200, { ok: true });
+    }
+    // ---------- gestão de usuários (só superadmin) ----------
+    if (partes[0] === 'usuarios') {
+      if (!superadmin) return resp(403, { erro: 'sem permissão' });
+      const idsEmpresas = async () => new Set((await store.empresaListar({ incluirConhecimento: false })).map((l) => l.id));
+      if (partes.length === 1 && req.metodo === 'GET') return resp(200, await store.usuarioListar());
+      if (partes.length === 1 && req.metodo === 'POST') {
+        const corpo = await lerCorpo(req);
+        const v = validarNovoUsuario(corpo);
+        if (v.erro) return resp(400, { erro: v.erro });
+        const existentes = await idsEmpresas();
+        const desconhecida = v.empresas.find((e) => !existentes.has(e));
+        if (desconhecida) return resp(400, { erro: `empresa inexistente: ${desconhecida}` });
+        const cred = await criarCredencial(corpo.senha);
+        const r = await store.usuarioCriar({ nome: v.nome, email: v.email, papel: v.papel, empresas: v.empresas, ...cred, criadoEm: new Date(ctx.agora()).toISOString() });
+        if (r.erro) return resp(409, { erro: 'e-mail já cadastrado' });
+        return resp(201, r);
+      }
+      if (partes.length >= 2) {
+        const uid = decodeURIComponent(partes[1]);
+        const alvo = await store.usuarioObter(uid);
+        if (!alvo) return resp(404, { erro: 'usuário inexistente' });
+        if (partes.length === 2 && req.metodo === 'PATCH') {
+          const b = await lerCorpo(req);
+          const m = {};
+          if (b.nome !== undefined) { if (typeof b.nome !== 'string' || !b.nome.trim() || b.nome.trim().length > 80) return resp(400, { erro: 'nome de 1 a 80 caracteres' }); m.nome = b.nome.trim(); }
+          if (b.papel !== undefined) { if (!PAPEIS_USUARIO.includes(b.papel)) return resp(400, { erro: 'papel deve ser equipe, admin ou superadmin' }); m.papel = b.papel; }
+          if (b.ativo !== undefined) { if (typeof b.ativo !== 'boolean') return resp(400, { erro: 'ativo deve ser verdadeiro ou falso' }); m.ativo = b.ativo; }
+          if (b.empresas !== undefined) {
+            if (!Array.isArray(b.empresas) || b.empresas.some((x) => typeof x !== 'string')) return resp(400, { erro: 'empresas deve ser uma lista de ids' });
+            const existentes = await idsEmpresas();
+            const desconhecida = b.empresas.find((e) => !existentes.has(e));
+            if (desconhecida) return resp(400, { erro: `empresa inexistente: ${desconhecida}` });
+            m.empresas = [...new Set(b.empresas)];
+          }
+          // Nunca ficar sem superadmin ativo.
+          const deixaDeSer = alvo.papel === 'superadmin' && alvo.ativo && ((m.papel && m.papel !== 'superadmin') || m.ativo === false);
+          if (deixaDeSer && (await store.usuarioSuperadminsAtivos()).filter((i) => i !== alvo.id).length === 0) {
+            return resp(409, { erro: 'precisa existir pelo menos um superadmin ativo' });
+          }
+          const r = await store.usuarioAtualizar(uid, m);
+          if (m.ativo === false || (m.papel && m.papel !== alvo.papel)) await store.sessoesRemoverDoUsuario(uid);
+          return resp(200, r);
+        }
+        if (partes.length === 3 && partes[2] === 'senha' && req.metodo === 'POST') {
+          const b = await lerCorpo(req);
+          const erroSenha = validarSenhaNova(b.senha);
+          if (erroSenha) return resp(400, { erro: erroSenha });
+          await store.usuarioSenhaDefinir(uid, await criarCredencial(b.senha));
+          await store.sessoesRemoverDoUsuario(uid);
+          return resp(200, { ok: true });
+        }
+      }
+    }
     // GET /historico/excluidas: resumo das empresas excluídas (o instantâneo completo fica gravado no histórico)
     if (partes[0] === 'historico' && partes[1] === 'excluidas' && partes.length === 2 && req.metodo === 'GET') {
-      if (!staff) return resp(403, { erro: 'sem permissão' });
+      if (!staff || (doUsuario && !superadmin)) return resp(403, { erro: 'sem permissão' });
       return resp(200, (await store.historicoExcluidas()).map((e) => ({
         seq: e.seq, quando: e.quando, papel: e.papel, operador: e.operador, empresaId: e.empresaId, nome: e.antes.nome,
         reservas: e.antes.reservas.length, ambientes: e.antes.ambientes.length, mesas: e.antes.ambientes.reduce((n, a) => n + a.mesas.length, 0),
@@ -306,13 +443,13 @@ export async function tratar(req, ctx) {
     }
     // POST /empresas { nome }  (adicionar empresa: nasce com agente vazio, sem ambientes e sem chave de API)
     if (partes[0] === 'empresas' && partes.length === 1 && req.metodo === 'POST') {
-      if (!staff) return resp(403, { erro: 'sem permissão' });
+      if (!staff || (doUsuario && !superadmin)) return resp(403, { erro: 'sem permissão' });
       const b = await lerCorpo(req);
-      return resp(...await criarEmpresaComHistorico(store, b, quem(req, papel)));
+      return resp(...await criarEmpresaComHistorico(store, b, quem(req, papel, auth)));
     }
     // Chave de API da empresa (só equipe de integração). A chave aparece uma única vez, ao gerar; só o hash fica guardado.
     if (partes[0] === 'empresas' && partes[2] === 'api' && (partes.length === 3 || (partes.length === 4 && partes[3] === 'chave'))) {
-      if (papel !== 'integracao') return resp(403, { erro: 'somente a equipe de integração gerencia a chave de API' });
+      if (!superadmin) return resp(403, { erro: 'somente a equipe de integração gerencia a chave de API' });
       const l = await empresa(store, decodeURIComponent(partes[1]));
       if (partes.length === 3 && req.metodo === 'GET') {
         return resp(200, { ativa: !!l.chave, prefixo: l.chave ? l.chave.prefixo : null, criadaEm: l.chave ? l.chave.criadaEm : null });
@@ -322,11 +459,11 @@ export async function tratar(req, ctx) {
         const antes = l.chave ? { prefixo: l.chave.prefixo } : {};
         const nova = { hash: await hashChave(chave), prefixo: chave.slice(0, 11), criadaEm: new Date(plat.agora()).toISOString() };
           await store.chaveDefinir(l.id, nova);
-        await registrar(store, { empresaId: l.id, entidade: 'api', entidadeId: 'chave', acao: 'chave_gerada', ...quem(req, papel), antes, depois: { prefixo: nova.prefixo } });
+        await registrar(store, { empresaId: l.id, entidade: 'api', entidadeId: 'chave', acao: 'chave_gerada', ...quem(req, papel, auth), antes, depois: { prefixo: nova.prefixo } });
         return resp(201, { chave, prefixo: nova.prefixo, criadaEm: nova.criadaEm });
       }
       if (partes.length === 4 && req.metodo === 'DELETE') {
-        if (l.chave) await registrar(store, { empresaId: l.id, entidade: 'api', entidadeId: 'chave', acao: 'chave_revogada', ...quem(req, papel), antes: { prefixo: l.chave.prefixo }, depois: {} });
+        if (l.chave) await registrar(store, { empresaId: l.id, entidade: 'api', entidadeId: 'chave', acao: 'chave_revogada', ...quem(req, papel, auth), antes: { prefixo: l.chave.prefixo }, depois: {} });
         await store.chaveRemover(l.id);
         return resp(200, { ativa: false });
       }
@@ -334,11 +471,14 @@ export async function tratar(req, ctx) {
 
     if (partes[0] === 'empresas' && partes.length === 1 && req.metodo === 'GET') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
-      return resp(200, (await store.empresaListar({ incluirConhecimento: false })).map((l) => ({ id: l.id, nome: l.nome, modulos: { ...l.modulos } })));
+      return resp(200, (await store.empresaListar({ incluirConhecimento: false }))
+        .filter((l) => !doUsuario || superadmin || auth.usuario.empresas.includes(l.id))
+        .map((l) => ({ id: l.id, nome: l.nome, modulos: { ...l.modulos } })));
     }
     // PATCH /empresas/:id  { nome }  (renomear a empresa)
     if (partes[0] === 'empresas' && partes.length === 2 && req.metodo === 'PATCH') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
+      if (!reautenticado) return exigirReautenticacao();
       const l = await empresa(store, decodeURIComponent(partes[1]));
       const b = await lerCorpo(req);
       const v = await validarNome(store, b.nome, l.id);
@@ -347,7 +487,7 @@ export async function tratar(req, ctx) {
       const antes = l.nome;
       await store.empresaRenomear(l.id, nome);
       const dl = diff({ nome: antes }, { nome });
-      if (Object.keys(dl.depois).length) await registrar(store, { empresaId: l.id, entidade: 'empresa', entidadeId: l.id, acao: 'editada', ...quem(req, papel), ...dl });
+      if (Object.keys(dl.depois).length) await registrar(store, { empresaId: l.id, entidade: 'empresa', entidadeId: l.id, acao: 'editada', ...quem(req, papel, auth), ...dl });
       return resp(200, { id: l.id, nome, modulos: { ...l.modulos } });
     }
     // PATCH/DELETE ambientes e DELETE mesas; o nome é o identificador do ambiente.
@@ -365,7 +505,7 @@ export async function tratar(req, ctx) {
         nome = typeof b?.nome === 'string' ? b.nome.trim() : '';
         if (!nome || [...nome].length > 60) return resp(400, { erro: 'nome do ambiente deve ter de 1 a 60 caracteres' });
       }
-      return resp(...await mudarLayout(store, lid, partes[2], id, req.metodo, nome, quem(req, papel)));
+      return resp(...await mudarLayout(store, lid, partes[2], id, req.metodo, nome, quem(req, papel, auth)));
     }
     // PATCH /empresas/:id/mesas/:mesaId  { capacidade?, reservavel? }
     if (partes[0] === 'empresas' && partes[2] === 'mesas' && partes.length === 4 && req.metodo === 'PATCH') {
@@ -386,7 +526,7 @@ export async function tratar(req, ctx) {
       const editada = await store.mesaEditar(l.id, mesaId, { capacidade: b.capacidade, reservavel: b.reservavel });
       if (!editada) return resp(404, { erro: 'mesa inexistente' });
       const dm = diff(antesMesa, { capacidade: editada.mesa.capacidade, reservavel: editada.mesa.reservavel });
-      if (Object.keys(dm.depois).length) await registrar(store, { empresaId: l.id, entidade: 'mesa', entidadeId: mesaId, acao: 'editada', ...quem(req, papel), ...dm });
+      if (Object.keys(dm.depois).length) await registrar(store, { empresaId: l.id, entidade: 'mesa', entidadeId: mesaId, acao: 'editada', ...quem(req, papel, auth), ...dm });
       return resp(200, editada.mesa);
     }
     // PATCH /empresas/:id/reservas/:rid {pessoas?,data?,horario?,mesaId?} | {status:'cancelada'|'confirmada'}; DELETE cancela
@@ -395,7 +535,7 @@ export async function tratar(req, ctx) {
       const lid = decodeURIComponent(partes[1]), rid = decodeURIComponent(partes[3]);
       if (!(await moduloLigado(store, lid, 'reservas'))) return resp(404, { erro: 'recurso "reservas" não habilitado para esta empresa' });
       if (!codigoReservaValido(rid)) return resp(404, { erro: 'reserva inexistente' });
-      const ator = quem(req, papel);
+      const ator = quem(req, papel, auth);
       if (req.metodo === 'DELETE' && url.searchParams.get('definitivo') === '1') {
         return resp(...await excluirReserva(store, lid, rid, ator));
       }
@@ -408,10 +548,10 @@ export async function tratar(req, ctx) {
     }
     // POST /empresas/:id/historico/:seq/desfazer
     if (partes[0] === 'empresas' && partes[2] === 'historico' && partes.length === 5 && partes[4] === 'desfazer' && req.metodo === 'POST') {
-      if (!staff) return resp(403, { erro: 'sem permissão' });
+      if (!staff || papel === 'equipe') return resp(403, { erro: 'sem permissão' });
       const seq = Number(partes[3]);
       if (!Number.isInteger(seq)) return resp(404, { erro: 'evento inexistente' });
-      const r = await desfazer(store, decodeURIComponent(partes[1]), seq, quem(req, papel));
+      const r = await desfazer(store, decodeURIComponent(partes[1]), seq, quem(req, papel, auth));
       return resp(r.status === 'indisponivel' ? 409 : 200, r);
     }
     // Base de conhecimento: GET (chat e equipe) lê; POST/PATCH/DELETE (equipe) editam.
@@ -420,7 +560,7 @@ export async function tratar(req, ctx) {
       const eid = decodeURIComponent(partes[1]);
       const e = await empresa(store, eid);
       if (e.modulos.conhecimento === false) return resp(404, { erro: 'recurso "conhecimento" não habilitado para esta empresa' });
-      const ator = quem(req, papel);
+      const ator = quem(req, papel, auth);
       if (partes.length === 3 && req.metodo === 'GET') return resp(200, { itens: await conhecimento.listarPublico(store, eid) });
       if (partes.length === 3 && req.metodo === 'POST') {
         if (!staff) return resp(403, { erro: 'sem permissão' });
@@ -476,6 +616,7 @@ export async function tratar(req, ctx) {
     // PATCH /empresas/:id/modulos { reservas?, conhecimento? }: liga ou desliga recursos (os dados são mantidos)
     if (recurso === 'modulos' && req.metodo === 'PATCH') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
+      if (!reautenticado) return exigirReautenticacao();
       const e = await empresa(store, empresaId);
       const vm = validarModulos(await lerCorpo(req));
       if (vm.erro) return resp(400, { erro: vm.erro });
@@ -483,7 +624,7 @@ export async function tratar(req, ctx) {
       const antes = Object.fromEntries(MODULOS.map((m) => [`modulo_${m}`, e.modulos[m]]));
       const novos = await store.empresaModulosDefinir(e.id, vm.modulos);
       const d = diff(antes, Object.fromEntries(MODULOS.map((m) => [`modulo_${m}`, novos[m]])));
-      if (Object.keys(d.depois).length) await registrar(store, { empresaId: e.id, entidade: 'empresa', entidadeId: e.id, acao: 'editada', ...quem(req, papel), ...d });
+      if (Object.keys(d.depois).length) await registrar(store, { empresaId: e.id, entidade: 'empresa', entidadeId: e.id, acao: 'editada', ...quem(req, papel, auth), ...d });
       return resp(200, { ...novos });
     }
 
@@ -497,9 +638,9 @@ export async function tratar(req, ctx) {
       const b = await lerCorpo(req);
       const mud = b.campos && typeof b.campos === 'object' && !Array.isArray(b.campos) ? b.campos : { [b.campo]: b.valor };
       const antesCfg = await lerConfig(store, empresaId);
-      await atualizarVarios(store, empresaId, mud, papel);
+      await atualizarVarios(store, empresaId, mud, base);
       const cfg = await lerConfig(store, empresaId);
-      const ator = quem(req, papel);
+      const ator = quem(req, papel, auth);
       for (const campo of Object.keys(mud)) {
         const da = diff({ [campo]: antesCfg[campo] }, { [campo]: cfg[campo] });
         if (Object.keys(da.depois).length) await registrar(store, { empresaId, entidade: 'agente', entidadeId: campo, acao: 'editada', ...ator, ...da });
@@ -514,7 +655,7 @@ export async function tratar(req, ctx) {
         return resp(400, { erro: 'data (AAAA-MM-DD) e horario (HH:MM) obrigatórios' });
       }
       const r = await criarReservaComHistorico(store, { empresaId, data: b.data, horario: b.horario, pessoas: b.pessoas,
-        ambiente: b.ambiente, mesaId: b.mesaId, chave: String(chave), nomeCliente: b.nomeCliente, contato: b.contato }, quem(req, papel));
+        ambiente: b.ambiente, mesaId: b.mesaId, chave: String(chave), nomeCliente: b.nomeCliente, contato: b.contato }, quem(req, papel, auth));
       return resp(r.status === 'confirmada' ? 201 : 200, r);
     }
     // Consulta do agente antes de reservar: mesas livres por ambiente
@@ -536,26 +677,31 @@ export async function tratar(req, ctx) {
         .map(publica));
     }
     if (recurso === 'historico' && req.metodo === 'GET') {
-      if (!staff) return resp(403, { erro: 'sem permissão' });
+      if (!staff || papel === 'equipe') return resp(403, { erro: 'sem permissão' });
       await empresa(store, empresaId);
       return resp(200, await listar(store, empresaId, { entidade: url.searchParams.get('entidade'), entidadeId: url.searchParams.get('id'), limite: url.searchParams.get('limite') }));
     }
     // POST /empresas/:id/excluir { senha, confirmarNome }: exige a senha do administrador. Irreversível; grava instantâneo no histórico.
     if (recurso === 'excluir' && req.metodo === 'POST') {
       if (!staff) return resp(403, { erro: 'sem permissão' });
+      if (papel === 'equipe') return resp(403, { erro: 'somente admin ou superadmin exclui empresa' });
       const l = await empresa(store, empresaId);
-      if (!adminSenha) return resp(503, { erro: 'exclusão de empresa desativada: a senha do administrador não está configurada no servidor' });
+      // Usuário logado confirma com a PRÓPRIA senha; o token do env usa CHATFLOW_ADMIN_SENHA.
+      if (!doUsuario && !adminSenha) return resp(503, { erro: 'exclusão de empresa desativada: a senha do administrador não está configurada no servidor' });
       const agora = plat.agora();
       const tent = await store.tentativasAdminObter();
       if (tent.ate > agora) return resp(429, { erro: `muitas tentativas incorretas; tente de novo em ${Math.ceil((tent.ate - agora) / 60000)} min` });
       const b = await lerCorpo(req);
-      const ator = quem(req, papel);
-      if (typeof b.senha !== 'string' || !plat.iguaisTempoConstante(await hashChave(b.senha), await hashChave(adminSenha))) {
+      const ator = quem(req, papel, auth);
+      const senhaCerta = typeof b.senha === 'string' && (doUsuario
+        ? await conferirSenha(b.senha, await store.usuarioObter(auth.usuario.id), plat.iguaisTempoConstante)
+        : plat.iguaisTempoConstante(await hashChave(b.senha), await hashChave(adminSenha)));
+      if (!senhaCerta) {
         tent.n++;
         if (tent.n >= 5) { tent.ate = agora + 15 * 60000; tent.n = 0; }
         await store.tentativasAdminGravar(tent);
         await registrar(store, { empresaId: l.id, entidade: 'empresa', entidadeId: l.id, acao: 'exclusao_negada', ...ator });
-        return resp(403, { erro: 'senha do administrador incorreta' });
+        return resp(403, { erro: doUsuario ? 'senha incorreta' : 'senha do administrador incorreta' });
       }
       tent.n = 0;
       await store.tentativasAdminGravar(tent);
@@ -577,7 +723,7 @@ export async function tratar(req, ctx) {
       if (!nome || [...nome].length > 40) return resp(400, { erro: 'nome do ambiente deve ter de 1 a 40 caracteres' });
       const cr = await store.ambienteCriar(l.id, nome);
       if (!cr.ok) return resp(409, { erro: 'já existe um ambiente com esse nome' });
-      await registrar(store, { empresaId: l.id, entidade: 'ambiente', entidadeId: nome, acao: 'criada', ...quem(req, papel), depois: { nome } });
+      await registrar(store, { empresaId: l.id, entidade: 'ambiente', entidadeId: nome, acao: 'criada', ...quem(req, papel, auth), depois: { nome } });
       return resp(201, { nome, mesas: [] });
     }
     // POST /empresas/:id/mesas { ambiente, capacidade, reservavel? }
@@ -589,7 +735,7 @@ export async function tratar(req, ctx) {
       if (!amb) return resp(404, { erro: 'ambiente inexistente' });
       if (!Number.isInteger(b.capacidade) || b.capacidade < 1 || b.capacidade > 100) return resp(400, { erro: 'capacidade inválida' });
       const mesa = await store.mesaCriar(l.id, amb.nome, { capacidade: b.capacidade, reservavel: b.reservavel });
-      await registrar(store, { empresaId: l.id, entidade: 'mesa', entidadeId: mesa.id, acao: 'criada', ...quem(req, papel), depois: { ambiente: amb.nome, capacidade: mesa.capacidade, reservavel: mesa.reservavel } });
+      await registrar(store, { empresaId: l.id, entidade: 'mesa', entidadeId: mesa.id, acao: 'criada', ...quem(req, papel, auth), depois: { ambiente: amb.nome, capacidade: mesa.capacidade, reservavel: mesa.reservavel } });
       return resp(201, mesa);
     }
     if (recurso === 'estrutura' && req.metodo === 'GET') {

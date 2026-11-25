@@ -152,3 +152,36 @@ pub struct Reserva {
     pub nome_cliente: Option<String>,
     pub contato: Option<String>,
 }
+
+/// Usuário com login próprio. `senha_hash`, `salt` e `iteracoes` nunca saem pela API.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Usuario {
+    pub id: String,
+    pub nome: String,
+    pub email: String,
+    pub papel: String,
+    pub ativo: bool,
+    pub empresas: Vec<String>,
+    pub senha_hash: String,
+    pub salt: String,
+    pub iteracoes: u32,
+    pub criado_em: String,
+    pub ultimo_login: Option<String>,
+}
+
+/// Sessão de usuário: só o hash do token fica guardado (no repositório, a chave).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sessao {
+    pub usuario_id: String,
+    pub criada_em: String,
+    pub expira_em: String,
+    pub reautenticado_em: Option<String>,
+}
+
+/// Credencial derivada (PBKDF2): hash e sal em hexadecimal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Credencial {
+    pub senha_hash: String,
+    pub salt: String,
+    pub iteracoes: u32,
+}

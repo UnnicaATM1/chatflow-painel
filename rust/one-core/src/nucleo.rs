@@ -8,6 +8,10 @@ use crate::conhecimento;
 use crate::contexto::{contexto, recursos_de};
 use crate::historico::{Ator, diff, evento, registrar};
 use crate::mapa::mapa;
+use crate::usuarios::{
+    NovoUsuario, PAPEIS_USUARIO, conferir_senha, criar_credencial, eh_superadmin, lista_de_ids,
+    normalizar_email, validar_novo_usuario, validar_senha_nova,
+};
 use crate::reservas::{
     Mudancas, PedidoReserva, cancelar_reserva, disponibilidade, editar_reserva, publica,
     reativar_reserva, reservar_detalhado,
@@ -17,10 +21,12 @@ use crate::util::{
     tam,
 };
 use one_store::{
-    Ambiente, Chave, Empresa, ExcluirReserva, Json, Modulos, Plataforma, RemoverLayout,
+    Ambiente, Chave, Empresa, Sessao, Usuario, ExcluirReserva, Json, Modulos, Plataforma, RemoverLayout,
     RenomearAmbiente, Repositorio, iguais_tempo_constante, iso_ms,
 };
 use serde_json::{Map, json};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
@@ -32,6 +38,10 @@ pub const LIMITE_CORPO: usize = 512 * 1024;
 /// 6 MiB: documento de até 4 MB em base64.
 pub const LIMITE_CORPO_ARQUIVO: usize = 6 * 1024 * 1024;
 const JANELA_MS: i64 = 60_000;
+/// Validade da sessão de usuário.
+const SESSAO_MS: i64 = 12 * 60 * 60 * 1000;
+/// Quanto tempo a reautenticação vale.
+const REAUTENTICACAO_MS: i64 = 5 * 60 * 1000;
 const CORS_METODOS: &str = "GET, POST, PATCH, DELETE, OPTIONS";
 const CORS_CABECALHOS: &str = "Authorization, Content-Type, Idempotency-Key, X-Operador";
 const PERMISSAO_PADRAO: [&str; 6] = [
@@ -109,6 +119,8 @@ pub struct Config {
     pub fuso: String,
     pub limite_invalidas: u32,
     pub limite_validas: u32,
+    /// Tentativas de login por minuto, por e-mail e por IP.
+    pub limite_login: u32,
 }
 
 impl Config {
@@ -121,6 +133,7 @@ impl Config {
             fuso: crate::tempo::FUSO_PADRAO.to_string(),
             limite_invalidas: 20,
             limite_validas: 300,
+            limite_login: 10,
         }
     }
 }
@@ -156,6 +169,7 @@ pub struct Contexto<R: Repositorio> {
     pub cfg: Config,
     inv: Mutex<Limitador>,
     val: Mutex<Limitador>,
+    login: Mutex<Limitador>,
 }
 
 impl<R: Repositorio> Contexto<R> {
@@ -180,6 +194,7 @@ impl<R: Repositorio> Contexto<R> {
             cfg,
             inv: Mutex::new(Limitador::default()),
             val: Mutex::new(Limitador::default()),
+            login: Mutex::new(Limitador::default()),
         })
     }
 }
@@ -212,9 +227,19 @@ pub fn cabecalhos_cors(cfg: &Config, metodo: &str, origem: Option<&str>) -> Vec<
     h
 }
 
+struct UsuarioSessao {
+    id: String,
+    nome: String,
+    email: String,
+    empresas: Vec<String>,
+}
+
 struct Auth {
     papel: String,
     empresa_escopo: Option<String>,
+    usuario: Option<UsuarioSessao>,
+    sessao_hash: Option<String>,
+    reautenticado_em: Option<String>,
 }
 
 async fn autenticar<R: Repositorio>(ctx: &Contexto<R>, req: &Req) -> Option<Auth> {
@@ -234,13 +259,42 @@ async fn autenticar<R: Repositorio>(ctx: &Contexto<R>, req: &Req) -> Option<Auth
             return Some(Auth {
                 papel: papel.into(),
                 empresa_escopo: None,
+                usuario: None,
+                sessao_hash: None,
+                reautenticado_em: None,
             });
         }
+    }
+    // Sessão de usuário (token "s1_…"): papel, nome e empresas vêm do servidor.
+    if token.starts_with("s1_") {
+        let hash = sha256_hex(token);
+        let s = ctx.repo.sessao_por_hash(&hash).await?;
+        if s.expira_em.as_str() > iso_ms(ctx.plat.agora_ms()).as_str() {
+            let u = ctx.repo.usuario_obter(&s.usuario_id).await?;
+            if u.ativo {
+                return Some(Auth {
+                    papel: u.papel.clone(),
+                    empresa_escopo: None,
+                    usuario: Some(UsuarioSessao {
+                        id: u.id.clone(),
+                        nome: u.nome.clone(),
+                        email: u.email.clone(),
+                        empresas: u.empresas.clone(),
+                    }),
+                    sessao_hash: Some(hash),
+                    reautenticado_em: s.reautenticado_em.clone(),
+                });
+            }
+        }
+        return None;
     }
     let id = ctx.repo.empresa_por_chave_hash(&sha256_hex(token)).await?;
     Some(Auth {
         papel: "chat".into(),
         empresa_escopo: Some(id),
+        usuario: None,
+        sessao_hash: None,
+        reautenticado_em: None,
     })
 }
 
@@ -304,6 +358,13 @@ fn resp(status: u16, corpo: Json, cors: &[(String, String)]) -> Resp {
 
 fn passa(cors: &[(String, String)], status: u16, corpo: Json) -> Res<Resp> {
     Ok(resp(status, corpo, cors))
+}
+
+fn usuario_publico(u: &Usuario) -> Json {
+    json!({
+        "id": u.id, "nome": u.nome, "email": u.email, "papel": u.papel, "ativo": u.ativo,
+        "empresas": u.empresas, "criadoEm": u.criado_em, "ultimoLogin": u.ultimo_login,
+    })
 }
 
 fn so_staff(staff: bool) -> Res<()> {
@@ -551,6 +612,57 @@ async fn rotear<R: Repositorio>(
     if m == "GET" && caminho == "/saude" {
         return passa(cors, 200, json!({ "ok": true }));
     }
+    // POST /login { email, senha }: sem autenticação prévia; a falha é sempre a mesma resposta
+    if m == "POST" && caminho == "/login" {
+        let b = ler_corpo(req, LIMITE_CORPO).await?;
+        let email = normalizar_email(b.get("email").and_then(Json::as_str).unwrap_or(""));
+        let agora = ctx.plat.agora_ms();
+        let (r1, r2) = {
+            let mut l = ctx.login.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                l.contar(&format!("ip:{}", ip_de(&ctx.cfg, req)), agora, ctx.cfg.limite_login),
+                l.contar(&format!("email:{email}"), agora, ctx.cfg.limite_login),
+            )
+        };
+        if let Err(retry) = r1.and(r2) {
+            let mut r = resp(429, json!({ "erro": "muitas tentativas; tente novamente em instantes" }), cors);
+            r.headers.push(("Retry-After".into(), retry.to_string()));
+            return Ok(r);
+        }
+        let senha = b.get("senha").and_then(Json::as_str);
+        let u = match (email.is_empty(), senha) {
+            (false, Some(_)) => repo.usuario_por_email(&email).await,
+            _ => None,
+        };
+        // Sem usuário, gasta o mesmo tempo de derivação para não revelar se o e-mail existe.
+        let ok = match (senha, &u) {
+            (Some(s), Some(u)) => conferir_senha(s, &u.salt, u.iteracoes, &u.senha_hash),
+            (Some(s), None) => {
+                conferir_senha(s, &"00".repeat(16), crate::usuarios::ITERACOES_PBKDF2, &"0".repeat(64))
+            }
+            _ => false,
+        };
+        let Some(u) = u.filter(|u| ok && u.ativo) else {
+            return erro(401, "e-mail ou senha inválidos");
+        };
+        let token = format!("s1_{}", URL_SAFE_NO_PAD.encode(ctx.plat.aleatorio(32)));
+        repo.sessao_criar(
+            &sha256_hex(&token),
+            Sessao {
+                usuario_id: u.id.clone(),
+                criada_em: iso_ms(agora),
+                expira_em: iso_ms(agora + SESSAO_MS),
+                reautenticado_em: None,
+            },
+        )
+        .await;
+        repo.usuario_login_marcar(&u.id, &iso_ms(agora)).await;
+        return passa(
+            cors,
+            200,
+            json!({ "token": token, "usuario": { "id": u.id, "nome": u.nome, "email": u.email, "papel": u.papel, "empresas": u.empresas } }),
+        );
+    }
     let auth = autenticar(ctx, req).await;
     let agora = ctx.plat.agora_ms();
     let limite = match &auth {
@@ -581,11 +693,18 @@ async fn rotear<R: Repositorio>(
         return erro(401, "não autenticado");
     };
     let papel = auth.papel.as_str();
-    let ator = Ator::novo(papel, req.headers.get("x-operador").map(String::as_str));
+    let ator = match &auth.usuario {
+        Some(u) => Ator::de_usuario(papel, &u.id, &u.nome),
+        None => Ator::novo(papel, req.headers.get("x-operador").map(String::as_str)),
+    };
 
     let partes: Vec<&str> = caminho.split('/').filter(|s| !s.is_empty()).collect();
     let p = |i: usize| partes.get(i).copied();
-    let staff = papel == "cliente" || papel == "integracao";
+    let staff = papel == "cliente" || papel == "integracao" || PAPEIS_USUARIO.contains(&papel);
+    // papel legado das regras de edição do agente
+    let base = if eh_superadmin(papel) { "integracao" } else { "cliente" };
+    let do_usuario = auth.usuario.is_some();
+    let superadmin = eh_superadmin(papel);
     let consulta = parse_query(&query);
     let q = |k: &str| {
         consulta
@@ -603,9 +722,214 @@ async fn rotear<R: Repositorio>(
         }
     }
 
+    // Usuário que não é superadmin só enxerga as empresas liberadas para ele.
+    if let Some(u) = &auth.usuario
+        && !superadmin
+        && p(0) == Some("empresas")
+        && p(1).is_some()
+        && !u.empresas.contains(&dec(p(1).unwrap_or(""))?)
+    {
+        return erro(403, "empresa não liberada");
+    }
+    // Configuração sensível: equipe e admin reautenticam com a própria senha (vale 5 min); superadmin e tokens do env dispensam.
+    let reautenticado = !do_usuario
+        || superadmin
+        || auth
+            .reautenticado_em
+            .as_deref()
+            .is_some_and(|r| r >= iso_ms(agora - REAUTENTICACAO_MS).as_str());
+    let exigir_reautenticacao = || {
+        let mut r = resp(403, json!({ "erro": "digite novamente a sua senha para continuar", "reautenticar": true }), cors);
+        r.status = 403;
+        r
+    };
+
+    // ---------- sessão do usuário ----------
+    if p(0) == Some("logout") && partes.len() == 1 && m == "POST" {
+        if let Some(h) = &auth.sessao_hash {
+            repo.sessao_remover(h).await;
+        }
+        return passa(cors, 200, json!({ "ok": true }));
+    }
+    if p(0) == Some("eu") && partes.len() == 1 && m == "GET" {
+        if auth.empresa_escopo.is_some() {
+            return erro(403, "sem permissão");
+        }
+        return passa(
+            cors,
+            200,
+            match &auth.usuario {
+                Some(u) => json!({ "id": u.id, "nome": u.nome, "email": u.email, "papel": papel, "empresas": u.empresas, "reautenticadoEm": auth.reautenticado_em }),
+                None => json!({ "id": null, "nome": null, "email": null, "papel": papel, "empresas": null, "reautenticadoEm": null }),
+            },
+        );
+    }
+    if p(0) == Some("eu") && p(1) == Some("reautenticar") && partes.len() == 2 && m == "POST" {
+        let Some(u) = &auth.usuario else {
+            return erro(403, "somente usuários com login reautenticam");
+        };
+        let lim = ctx.login.lock().unwrap_or_else(|e| e.into_inner()).contar(&format!("email:{}", u.email), agora, ctx.cfg.limite_login);
+        if let Err(retry) = lim {
+            let mut r = resp(429, json!({ "erro": "muitas tentativas; tente novamente em instantes" }), cors);
+            r.headers.push(("Retry-After".into(), retry.to_string()));
+            return Ok(r);
+        }
+        let b = ler_corpo(req, LIMITE_CORPO).await?;
+        let completo = repo.usuario_obter(&u.id).await;
+        let certa = match (b.get("senha").and_then(Json::as_str), completo) {
+            (Some(s), Some(c)) => conferir_senha(s, &c.salt, c.iteracoes, &c.senha_hash),
+            _ => false,
+        };
+        if !certa {
+            return erro(403, "senha incorreta");
+        }
+        if let Some(h) = &auth.sessao_hash {
+            repo.sessao_reautenticar(h, &iso_ms(agora)).await;
+        }
+        return passa(cors, 200, json!({ "ok": true }));
+    }
+    if p(0) == Some("eu") && p(1) == Some("senha") && partes.len() == 2 && m == "POST" {
+        let Some(u) = &auth.usuario else {
+            return erro(403, "somente usuários com login trocam a senha");
+        };
+        let lim = ctx.login.lock().unwrap_or_else(|e| e.into_inner()).contar(&format!("email:{}", u.email), agora, ctx.cfg.limite_login);
+        if let Err(retry) = lim {
+            let mut r = resp(429, json!({ "erro": "muitas tentativas; tente novamente em instantes" }), cors);
+            r.headers.push(("Retry-After".into(), retry.to_string()));
+            return Ok(r);
+        }
+        let b = ler_corpo(req, LIMITE_CORPO).await?;
+        if let Some(e) = validar_senha_nova(b.get("nova")) {
+            return erro(400, e);
+        }
+        let completo = repo.usuario_obter(&u.id).await;
+        let certa = match (b.get("atual").and_then(Json::as_str), completo) {
+            (Some(s), Some(c)) => conferir_senha(s, &c.salt, c.iteracoes, &c.senha_hash),
+            _ => false,
+        };
+        if !certa {
+            return erro(403, "senha atual incorreta");
+        }
+        let nova = b.get("nova").and_then(Json::as_str).unwrap_or("");
+        repo.usuario_senha_definir(&u.id, criar_credencial(nova, ctx.plat.aleatorio(16))).await;
+        repo.sessoes_remover_do_usuario(&u.id, auth.sessao_hash.as_deref()).await;
+        return passa(cors, 200, json!({ "ok": true }));
+    }
+    // ---------- gestão de usuários (só superadmin) ----------
+    if p(0) == Some("usuarios") {
+        if !superadmin {
+            return erro(403, "sem permissão");
+        }
+        let ids_empresas = || async {
+            repo.empresa_listar().await.into_iter().map(|e| e.id).collect::<Vec<_>>()
+        };
+        if partes.len() == 1 && m == "GET" {
+            let lista: Vec<Json> = repo.usuario_listar().await.iter().map(usuario_publico).collect();
+            return passa(cors, 200, Json::Array(lista));
+        }
+        if partes.len() == 1 && m == "POST" {
+            let corpo = ler_corpo(req, LIMITE_CORPO).await?;
+            let NovoUsuario { nome, email, papel: papel_novo, empresas } = validar_novo_usuario(&corpo).map_err(|e| err(400, e))?;
+            let existentes = ids_empresas().await;
+            if let Some(d) = empresas.iter().find(|e| !existentes.contains(e)) {
+                return erro(400, format!("empresa inexistente: {d}"));
+            }
+            let senha = corpo.get("senha").and_then(Json::as_str).unwrap_or("");
+            let c = criar_credencial(senha, ctx.plat.aleatorio(16));
+            let novo = Usuario {
+                id: one_store::plataforma::uuid(ctx.plat.as_ref()),
+                nome,
+                email,
+                papel: papel_novo,
+                ativo: true,
+                empresas,
+                senha_hash: c.senha_hash,
+                salt: c.salt,
+                iteracoes: c.iteracoes,
+                criado_em: iso_ms(agora),
+                ultimo_login: None,
+            };
+            return match repo.usuario_criar(novo).await {
+                Ok(u) => passa(cors, 201, usuario_publico(&u)),
+                Err(()) => erro(409, "e-mail já cadastrado"),
+            };
+        }
+        if partes.len() >= 2 {
+            let uid = dec(p(1).unwrap_or(""))?;
+            let Some(alvo) = repo.usuario_obter(&uid).await else {
+                return erro(404, "usuário inexistente");
+            };
+            if partes.len() == 2 && m == "PATCH" {
+                let b = ler_corpo(req, LIMITE_CORPO).await?;
+                let mut nome: Option<String> = None;
+                let mut papel_m: Option<String> = None;
+                let mut ativo: Option<bool> = None;
+                let mut empresas: Option<Vec<String>> = None;
+                if let Some(v) = b.get("nome") {
+                    let t = v.as_str().map_or("", str::trim);
+                    if t.is_empty() || t.encode_utf16().count() > 80 {
+                        return erro(400, "nome de 1 a 80 caracteres");
+                    }
+                    nome = Some(t.to_string());
+                }
+                if let Some(v) = b.get("papel") {
+                    let t = v.as_str().unwrap_or("");
+                    if !PAPEIS_USUARIO.contains(&t) {
+                        return erro(400, "papel deve ser equipe, admin ou superadmin");
+                    }
+                    papel_m = Some(t.to_string());
+                }
+                if let Some(v) = b.get("ativo") {
+                    let Some(a) = v.as_bool() else {
+                        return erro(400, "ativo deve ser verdadeiro ou falso");
+                    };
+                    ativo = Some(a);
+                }
+                if b.get("empresas").is_some() {
+                    let Some(l) = lista_de_ids(b.get("empresas")) else {
+                        return erro(400, "empresas deve ser uma lista de ids");
+                    };
+                    let existentes = ids_empresas().await;
+                    if let Some(d) = l.iter().find(|e| !existentes.contains(e)) {
+                        return erro(400, format!("empresa inexistente: {d}"));
+                    }
+                    empresas = Some(l);
+                }
+                // Nunca ficar sem superadmin ativo.
+                let deixa_de_ser = alvo.papel == "superadmin"
+                    && alvo.ativo
+                    && (papel_m.as_deref().is_some_and(|x| x != "superadmin") || ativo == Some(false));
+                if deixa_de_ser
+                    && repo.usuario_superadmins_ativos().await.iter().all(|i| *i == alvo.id)
+                {
+                    return erro(409, "precisa existir pelo menos um superadmin ativo");
+                }
+                let mudou_papel = papel_m.as_deref().is_some_and(|x| x != alvo.papel);
+                let r = repo.usuario_atualizar(&uid, nome, papel_m, ativo, empresas).await;
+                if ativo == Some(false) || mudou_papel {
+                    repo.sessoes_remover_do_usuario(&uid, None).await;
+                }
+                return match r {
+                    Some(u) => passa(cors, 200, usuario_publico(&u)),
+                    None => erro(404, "usuário inexistente"),
+                };
+            }
+            if partes.len() == 3 && p(2) == Some("senha") && m == "POST" {
+                let b = ler_corpo(req, LIMITE_CORPO).await?;
+                if let Some(e) = validar_senha_nova(b.get("senha")) {
+                    return erro(400, e);
+                }
+                let senha = b.get("senha").and_then(Json::as_str).unwrap_or("");
+                repo.usuario_senha_definir(&uid, criar_credencial(senha, ctx.plat.aleatorio(16))).await;
+                repo.sessoes_remover_do_usuario(&uid, None).await;
+                return passa(cors, 200, json!({ "ok": true }));
+            }
+        }
+    }
+
     // GET /historico/excluidas: resumo das empresas excluídas (o instantâneo completo fica gravado no histórico)
     if p(0) == Some("historico") && p(1) == Some("excluidas") && partes.len() == 2 && m == "GET" {
-        so_staff(staff)?;
+        so_staff(staff && (!do_usuario || superadmin))?;
         let lista: Vec<Json> = repo
             .historico_excluidas()
             .await
@@ -623,7 +947,7 @@ async fn rotear<R: Repositorio>(
     }
     // POST /empresas { nome }  (nasce com agente vazio, sem ambientes e sem chave de API)
     if p(0) == Some("empresas") && partes.len() == 1 && m == "POST" {
-        so_staff(staff)?;
+        so_staff(staff && (!do_usuario || superadmin))?;
         let b = ler_corpo(req, LIMITE_CORPO).await?;
         let nome = validar_nome(repo, b.get("nome"), None).await?;
         let (mr, mc) = validar_modulos(b.get("modulos")).map_err(|e| err(400, e))?;
@@ -680,7 +1004,7 @@ async fn rotear<R: Repositorio>(
         && p(2) == Some("api")
         && (partes.len() == 3 || (partes.len() == 4 && p(3) == Some("chave")))
     {
-        if papel != "integracao" {
+        if !superadmin {
             return erro(
                 403,
                 "somente a equipe de integração gerencia a chave de API",
@@ -746,6 +1070,11 @@ async fn rotear<R: Repositorio>(
             .empresa_listar()
             .await
             .iter()
+            .filter(|l| {
+                auth.usuario
+                    .as_ref()
+                    .is_none_or(|u| superadmin || u.empresas.contains(&l.id))
+            })
             .map(|l| json!({ "id": l.id, "nome": l.nome, "modulos": modulos_json(l.modulos) }))
             .collect();
         return passa(cors, 200, Json::Array(lista));
@@ -753,6 +1082,9 @@ async fn rotear<R: Repositorio>(
     // PATCH /empresas/:id { nome }  (renomear a empresa)
     if p(0) == Some("empresas") && partes.len() == 2 && m == "PATCH" {
         so_staff(staff)?;
+        if !reautenticado {
+            return Ok(exigir_reautenticacao());
+        }
         let l = empresa(repo, &dec(p(1).unwrap_or(""))?).await?;
         let b = ler_corpo(req, LIMITE_CORPO).await?;
         let nome = validar_nome(repo, b.get("nome"), Some(&l.id)).await?;
@@ -1008,7 +1340,7 @@ async fn rotear<R: Repositorio>(
         && p(4) == Some("desfazer")
         && m == "POST"
     {
-        so_staff(staff)?;
+        so_staff(staff && papel != "equipe")?;
         let Some(seq) = numero_inteiro(p(3).unwrap_or("")) else {
             return erro(404, "evento inexistente");
         };
@@ -1143,6 +1475,9 @@ async fn rotear<R: Repositorio>(
     // PATCH /empresas/:id/modulos { reservas?, conhecimento? }: liga ou desliga recursos (os dados são mantidos)
     if recurso == "modulos" && m == "PATCH" {
         so_staff(staff)?;
+        if !reautenticado {
+            return Ok(exigir_reautenticacao());
+        }
         let e = empresa(repo, &empresa_id).await?;
         let b = ler_corpo(req, LIMITE_CORPO).await?;
         let (mr, mc) = validar_modulos(Some(&b)).map_err(|x| err(400, x))?;
@@ -1184,7 +1519,7 @@ async fn rotear<R: Repositorio>(
             _ => vec![(js_string(b.get("campo")), b.get("valor").cloned())],
         };
         let antes_cfg = ler_config(repo, &empresa_id).await?;
-        atualizar_varios(repo, &empresa_id, &mud, papel).await?;
+        atualizar_varios(repo, &empresa_id, &mud, base).await?;
         let cfg = ler_config(repo, &empresa_id).await?;
         for (campo, _) in &mud {
             let a = Map::from_iter([(
@@ -1296,7 +1631,7 @@ async fn rotear<R: Repositorio>(
         return passa(cors, 200, Json::Array(lista));
     }
     if recurso == "historico" && m == "GET" {
-        so_staff(staff)?;
+        so_staff(staff && papel != "equipe")?;
         empresa(repo, &empresa_id).await?;
         return passa(
             cors,
@@ -1310,13 +1645,18 @@ async fn rotear<R: Repositorio>(
     // POST /empresas/:id/excluir { senha, confirmarNome }: exige a senha do administrador. Irreversível; grava instantâneo no histórico.
     if recurso == "excluir" && m == "POST" {
         so_staff(staff)?;
+        if papel == "equipe" {
+            return erro(403, "somente admin ou superadmin exclui empresa");
+        }
         let l = empresa(repo, &empresa_id).await?;
-        let Some(admin) = ctx.cfg.admin_senha.as_deref().filter(|s| !s.is_empty()) else {
+        // Usuário logado confirma com a PRÓPRIA senha; o token do env usa CHATFLOW_ADMIN_SENHA.
+        let admin = ctx.cfg.admin_senha.as_deref().filter(|s| !s.is_empty());
+        if !do_usuario && admin.is_none() {
             return erro(
                 503,
                 "exclusão de empresa desativada: a senha do administrador não está configurada no servidor",
             );
-        };
+        }
         let agora = ctx.plat.agora_ms();
         let (mut n, mut ate) = repo.tentativas_admin_obter().await;
         if ate > agora {
@@ -1329,10 +1669,16 @@ async fn rotear<R: Repositorio>(
             );
         }
         let b = ler_corpo(req, LIMITE_CORPO).await?;
-        let senha_ok = b
-            .get("senha")
-            .and_then(Json::as_str)
-            .is_some_and(|s| iguais_tempo_constante(&sha256_hex(s), &sha256_hex(admin)));
+        let senha_ok = match (&auth.usuario, b.get("senha").and_then(Json::as_str)) {
+            (Some(u), Some(s)) => match repo.usuario_obter(&u.id).await {
+                Some(c) => conferir_senha(s, &c.salt, c.iteracoes, &c.senha_hash),
+                None => false,
+            },
+            (None, Some(s)) => {
+                admin.is_some_and(|a| iguais_tempo_constante(&sha256_hex(s), &sha256_hex(a)))
+            }
+            _ => false,
+        };
         if !senha_ok {
             n += 1;
             if n >= 5 {
@@ -1348,7 +1694,10 @@ async fn rotear<R: Repositorio>(
             ];
             ev.extend(ator.pares());
             registrar(repo, evento(ev)).await;
-            return erro(403, "senha do administrador incorreta");
+            return erro(
+                403,
+                if do_usuario { "senha incorreta" } else { "senha do administrador incorreta" },
+            );
         }
         repo.tentativas_admin_gravar(0, ate).await;
         if b.get("confirmarNome").and_then(Json::as_str) != Some(l.nome.as_str()) {

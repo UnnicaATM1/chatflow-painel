@@ -32,6 +32,11 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
   const ttlIdem = idempotenciaTtlMs > 0 ? idempotenciaTtlMs : IDEMPOTENCIA_TTL_PADRAO_MS;
   const maxIdem = idempotenciaMax > 0 ? idempotenciaMax : IDEMPOTENCIA_MAX_PADRAO;
   const idempotencia = new Map(); // empresaId -> Map(chave -> { resposta, quando }), na ordem em que foram gravadas
+  const usuarios = new Map(); // id -> { id, nome, email, papel, ativo, empresas:Set, senhaHash, salt, iteracoes, criadoEm, ultimoLogin }
+  const sessoes = new Map(); // hash do token -> { usuarioId, criadaEm, expiraEm, reautenticadoEm }
+  const usuarioPublico = (u) => ({ id: u.id, nome: u.nome, email: u.email, papel: u.papel, ativo: u.ativo, empresas: [...u.empresas],
+    criadoEm: u.criadoEm, ultimoLogin: u.ultimoLogin });
+  const usuarioCompleto = (u) => ({ ...usuarioPublico(u), senhaHash: u.senhaHash, salt: u.salt, iteracoes: u.iteracoes });
   // Resposta guardada para a chave, ou null se não existe ou já passou da validade (e então é esquecida).
   const idemObter = (empresaId, chave) => {
     const m = idempotencia.get(empresaId);
@@ -132,6 +137,46 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
     async agenteAtualizar(id, mudancas) {
       Object.assign(empresas.get(id).agente, mudancas);
     },
+
+    // ---------- usuários e sessões (login individual por camada) ----------
+    // usuarioCriar devolve o usuário público ou { erro: 'email_duplicado' }. Leituras por e-mail e id trazem o hash (só o núcleo usa).
+    async usuarioCriar(d) {
+      if ([...usuarios.values()].some((u) => u.email === d.email)) return { erro: 'email_duplicado' };
+      const u = { id: p.uuid(), nome: d.nome, email: d.email, papel: d.papel, ativo: true, empresas: new Set((d.empresas || []).filter((e) => empresas.has(e))),
+        senhaHash: d.senhaHash, salt: d.salt, iteracoes: d.iteracoes, criadoEm: d.criadoEm, ultimoLogin: null };
+      usuarios.set(u.id, u);
+      return usuarioPublico(u);
+    },
+    async usuarioPorEmail(email) { for (const u of usuarios.values()) if (u.email === email) return usuarioCompleto(u); return null; },
+    async usuarioObter(id) { const u = usuarios.get(id); return u ? usuarioCompleto(u) : null; },
+    async usuarioListar() { return [...usuarios.values()].map(usuarioPublico); },
+    // m: { nome?, papel?, ativo?, empresas? }; devolve o usuário público ou null
+    async usuarioAtualizar(id, m) {
+      const u = usuarios.get(id);
+      if (!u) return null;
+      if (m.nome !== undefined) u.nome = m.nome;
+      if (m.papel !== undefined) u.papel = m.papel;
+      if (m.ativo !== undefined) u.ativo = Boolean(m.ativo);
+      if (m.empresas !== undefined) u.empresas = new Set(m.empresas.filter((e) => empresas.has(e)));
+      return usuarioPublico(u);
+    },
+    async usuarioSenhaDefinir(id, c) {
+      const u = usuarios.get(id);
+      if (!u) return false;
+      u.senhaHash = c.senhaHash; u.salt = c.salt; u.iteracoes = c.iteracoes;
+      return true;
+    },
+    async usuarioLoginMarcar(id, quando) { const u = usuarios.get(id); if (u) u.ultimoLogin = quando; },
+    async usuarioSuperadminsAtivos() { return [...usuarios.values()].filter((u) => u.papel === 'superadmin' && u.ativo).map((u) => u.id); },
+    async sessaoCriar(s) { sessoes.set(s.tokenHash, { usuarioId: s.usuarioId, criadaEm: s.criadaEm, expiraEm: s.expiraEm, reautenticadoEm: null }); },
+    async sessaoPorHash(hash) { const s = sessoes.get(hash); return s ? { ...s } : null; },
+    async sessaoReautenticar(hash, quando) { const s = sessoes.get(hash); if (s) s.reautenticadoEm = quando; },
+    async sessaoRemover(hash) { sessoes.delete(hash); },
+    // exceto: hash da sessão a manter (troca de senha mantém a atual)
+    async sessoesRemoverDoUsuario(usuarioId, exceto = null) {
+      for (const [h, s] of sessoes) if (s.usuarioId === usuarioId && h !== exceto) sessoes.delete(h);
+    },
+    async sessoesExpiradasRemover(agoraIso) { for (const [h, s] of sessoes) if (s.expiraEm <= agoraIso) sessoes.delete(h); },
 
     // ---------- chave de API da empresa (só o hash é guardado) ----------
     async chaveDefinir(id, chave) { empresas.get(id).chave = chave; },
@@ -324,6 +369,7 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
     // e grava o evento de auditoria junto. Devolve o evento gravado.
     async empresaExcluir(id, evento) {
       empresas.delete(id);
+      for (const u of usuarios.values()) u.empresas.delete(id);
       const codigos = codigosPorEmpresa.get(id);
       for (const [codigo, uuid] of codigos || []) {
         reservas.delete(uuid);

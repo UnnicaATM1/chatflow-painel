@@ -30,28 +30,48 @@
     });
   }
 
+  // Login individual: e-mail e senha viram um token de sessão (s1_…). A chave de acesso (do servidor) fica como emergência.
+  function loginUsuario(email, senha) {
+    return fetch(BASE + '/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email, senha: senha }) })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) { var e = new Error(j.erro || 'Erro ' + r.status); e.status = r.status; throw e; } return j; }); });
+  }
+
   function Login(p) {
+    var sm = useState('usuario'), modo = sm[0], setModo = sm[1];
     var st = useState(''), valor = st[0], setValor = st[1];
     var sn = useState(lerOperador()), nome = sn[0], setNome = sn[1];
+    var sq = useState(''), email = sq[0], setEmail = sq[1];
     var se = useState(''), erro = se[0], setErro = se[1];
-    function entrar(ev) {
-      ev.preventDefault();
+    function entrarUsuario(ev) {
+      ev.preventDefault(); setErro('');
+      gravarOperador('');
+      loginUsuario(email, valor).then(function (r) {
+        return api(r.token, 'GET', '/empresas').then(function (empresas) { gravarToken(r.token); p.onEntrar(r.token, empresas); });
+      }).catch(function (e) { setErro(e.status === 401 ? 'E-mail ou senha inválidos.' : e.status === 429 ? 'Muitas tentativas. Aguarde um minuto.' : e.message); });
+    }
+    function entrarChave(ev) {
+      ev.preventDefault(); setErro('');
       gravarOperador(nome.trim());
       api(valor, 'GET', '/empresas').then(function (empresas) { gravarToken(valor); p.onEntrar(valor, empresas); })
         .catch(function (e) { setErro(e.status === 401 ? 'Chave inválida.' : e.status === 403 ? 'Esta chave não acessa o painel.' : e.message); });
     }
+    var usuario = modo === 'usuario';
     return h('div', { className: 'pagina', style: { maxWidth: 420, marginTop: 64 } },
       h('div', { className: 'painel' },
-        h('form', { className: 'k1-stack', onSubmit: entrar },
+        h('form', { className: 'k1-stack', onSubmit: usuario ? entrarUsuario : entrarChave },
           h('h1', null, 'Entrar no ChatFlow Painel'),
-          h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, 'Seu nome (aparece no histórico)'),
-            h('input', { type: 'text', value: nome, maxLength: 60, autoComplete: 'off', onChange: function (e) { setNome(e.target.value); } })),
-          h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, 'Chave de acesso'),
-            h('input', { type: 'password', value: valor, autoComplete: 'off', onChange: function (e) { setValor(e.target.value); } })),
+          usuario
+            ? h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, 'E-mail'),
+              h('input', { type: 'email', value: email, autoComplete: 'username', onChange: function (e) { setEmail(e.target.value); } }))
+            : h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, 'Seu nome (aparece no histórico)'),
+              h('input', { type: 'text', value: nome, maxLength: 60, autoComplete: 'off', onChange: function (e) { setNome(e.target.value); } })),
+          h('label', { className: 'campo' }, h('span', { className: 'rotulo' }, usuario ? 'Senha' : 'Chave de acesso'),
+            h('input', { type: 'password', value: valor, autoComplete: usuario ? 'current-password' : 'off', onChange: function (e) { setValor(e.target.value); } })),
           erro && h('div', { className: 'erro', role: 'alert' }, erro),
-          h(K.Button, { type: 'submit', disabled: !valor }, 'Entrar'))));
+          h(K.Button, { type: 'submit', disabled: !valor || (usuario && !email) }, 'Entrar'),
+          h(K.Button, { variant: 'ghost', type: 'button', onClick: function () { setModo(usuario ? 'chave' : 'usuario'); setErro(''); setValor(''); } },
+            usuario ? 'Entrar com chave de acesso' : 'Entrar com e-mail e senha'))));
   }
-
 
   function chaveNova() { return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random(); }
 
@@ -921,21 +941,116 @@
       msg && h('span', { className: 'erro', role: 'alert' }, msg));
   }
 
-  // Configuração: a equipe da empresa digita de novo a senha de acesso; só o superadmin (integração) entra direto.
+  // Configuração: equipe e admin digitam a própria senha de novo (o servidor confere e guarda por 5 min); o superadmin entra direto.
   function SenhaConfig(p) {
     var sv = useState(''), v = sv[0], setV = sv[1];
     var sm = useState(''), msg = sm[0], setMsg = sm[1];
     function conferir(e) {
       e.preventDefault();
-      if (v === p.token) { setV(''); p.aoLiberar(); } else { setMsg('Senha incorreta.'); }
+      if (!p.sessaoUsuario) { if (v === p.token) { setV(''); p.aoLiberar(); } else { setMsg('Senha incorreta.'); } return; }
+      api(p.token, 'POST', '/eu/reautenticar', { senha: v }).then(function () { setV(''); p.aoLiberar(); })
+        .catch(function (er) { setMsg(er.status === 429 ? 'Muitas tentativas. Aguarde um minuto.' : 'Senha incorreta.'); });
     }
     return h('section', { className: 'painel k1-stack' },
       h('h2', null, 'Configuração protegida'),
-      h('div', { className: 'rotulo' }, 'Digite novamente a sua senha de acesso para abrir esta aba.'),
+      h('div', { className: 'rotulo' }, 'Digite novamente a sua senha para abrir esta aba.'),
       h('form', { className: 'k1-row', onSubmit: conferir },
-        h('input', { type: 'password', value: v, autoComplete: 'off', 'aria-label': 'Senha de acesso', placeholder: 'Senha de acesso', onChange: function (e) { setV(e.target.value); setMsg(''); } }),
+        h('input', { type: 'password', value: v, autoComplete: 'current-password', 'aria-label': 'Sua senha', placeholder: 'Sua senha', onChange: function (e) { setV(e.target.value); setMsg(''); } }),
         h(K.Button, { type: 'submit', disabled: !v }, 'Abrir'),
         msg && h('span', { className: 'erro', role: 'alert' }, msg)));
+  }
+
+  var ROTULO_PAPEL = { equipe: 'Equipe', admin: 'Admin', superadmin: 'Superadmin' };
+
+  // Tela Usuários (só superadmin): cadastro individual com senha própria, camada e empresas liberadas.
+  function Usuarios(p) {
+    var sl = useState(null), lista = sl[0], setLista = sl[1];
+    var sm = useState(''), msg = sm[0], setMsg = sm[1];
+    var sf = useState({ nome: '', email: '', papel: 'equipe', senha: '', empresas: [] }), f = sf[0], setF = sf[1];
+    var sr = useState(0), recarga = sr[0], setRecarga = sr[1];
+    var ss = useState(null), redef = ss[0], setRedef = ss[1]; // { id, senha }
+    useEffect(function () { api(p.token, 'GET', '/usuarios').then(setLista).catch(function (e) { setMsg(e.message); }); }, [p.token, recarga]);
+    function mudar(campo, valor) { var n = Object.assign({}, f); n[campo] = valor; setF(n); }
+    function alternarEmpresa(id) { mudar('empresas', f.empresas.indexOf(id) >= 0 ? f.empresas.filter(function (x) { return x !== id; }) : f.empresas.concat(id)); }
+    function criar(ev) {
+      ev.preventDefault(); setMsg('');
+      api(p.token, 'POST', '/usuarios', f).then(function () { setF({ nome: '', email: '', papel: 'equipe', senha: '', empresas: [] }); setMsg('Usuário criado.'); setRecarga(recarga + 1); })
+        .catch(function (e) { setMsg(e.message); });
+    }
+    function atualizar(id, mudanca) {
+      setMsg('');
+      api(p.token, 'PATCH', '/usuarios/' + encodeURIComponent(id), mudanca).then(function () { setRecarga(recarga + 1); }).catch(function (e) { setMsg(e.message); });
+    }
+    function alternarEmpresaDe(u, id) {
+      var atual = u.empresas || [];
+      atualizar(u.id, { empresas: atual.indexOf(id) >= 0 ? atual.filter(function (x) { return x !== id; }) : atual.concat(id) });
+    }
+    function redefinir(ev) {
+      ev.preventDefault(); setMsg('');
+      api(p.token, 'POST', '/usuarios/' + encodeURIComponent(redef.id) + '/senha', { senha: redef.senha })
+        .then(function () { setRedef(null); setMsg('Senha redefinida. As sessões dessa pessoa foram encerradas.'); })
+        .catch(function (e) { setMsg(e.message); });
+    }
+    var empresas = p.empresas || [];
+    return h('section', { className: 'painel k1-stack' },
+      h('h2', null, 'Usuários'),
+      h('div', { className: 'rotulo' }, 'Cada pessoa entra com o próprio e-mail e senha. O histórico registra quem fez cada alteração.'),
+      msg && h('div', { role: 'status', className: /criado|redefinida/.test(msg) ? 'rotulo' : 'erro' }, msg),
+      h('form', { className: 'k1-stack', onSubmit: criar },
+        h('div', { className: 'k1-row' },
+          h('input', { type: 'text', placeholder: 'Nome', value: f.nome, maxLength: 80, 'aria-label': 'Nome', onChange: function (e) { mudar('nome', e.target.value); } }),
+          h('input', { type: 'email', placeholder: 'E-mail', value: f.email, 'aria-label': 'E-mail', autoComplete: 'off', onChange: function (e) { mudar('email', e.target.value); } }),
+          h('select', { value: f.papel, 'aria-label': 'Camada', onChange: function (e) { mudar('papel', e.target.value); } },
+            ['equipe', 'admin', 'superadmin'].map(function (x) { return h('option', { key: x, value: x }, ROTULO_PAPEL[x]); })),
+          h('input', { type: 'password', placeholder: 'Senha provisória (10+ caracteres)', value: f.senha, 'aria-label': 'Senha provisória', autoComplete: 'new-password', onChange: function (e) { mudar('senha', e.target.value); } })),
+        f.papel !== 'superadmin' && h('div', { className: 'k1-row' }, h('span', { className: 'rotulo' }, 'Empresas liberadas:'),
+          empresas.map(function (e) {
+            return h('label', { key: e.id, className: 'k1-row', style: { gap: 4, fontSize: 13 } },
+              h('input', { type: 'checkbox', checked: f.empresas.indexOf(e.id) >= 0, onChange: function () { alternarEmpresa(e.id); } }), e.nome);
+          })),
+        h(K.Button, { type: 'submit', disabled: !f.nome.trim() || !f.email.trim() || f.senha.length < 10 }, 'Criar usuário')),
+      redef && h('form', { className: 'k1-row', onSubmit: redefinir },
+        h('span', null, 'Nova senha para ' + redef.nome + ':'),
+        h('input', { type: 'password', value: redef.senha, autoComplete: 'new-password', 'aria-label': 'Nova senha', onChange: function (e) { setRedef(Object.assign({}, redef, { senha: e.target.value })); } }),
+        h(K.Button, { type: 'submit', disabled: redef.senha.length < 10 }, 'Redefinir'),
+        h(K.Button, { variant: 'ghost', type: 'button', onClick: function () { setRedef(null); } }, 'Cancelar')),
+      lista && lista.length === 0 && h(K.EmptyState, null, 'Nenhum usuário ainda. Crie o primeiro superadmin acima.'),
+      lista && lista.length > 0 && h('table', null,
+        h('thead', null, h('tr', null, ['Nome', 'E-mail', 'Camada', 'Empresas', 'Último acesso', ''].map(function (c, i) { return h('th', { key: i }, c); }))),
+        h('tbody', null, lista.map(function (u) {
+          return h('tr', { key: u.id, style: u.ativo ? undefined : { opacity: 0.55 } },
+            h('td', null, u.nome + (u.ativo ? '' : ' (inativo)')),
+            h('td', { className: 'mono', style: { fontSize: 12 } }, u.email),
+            h('td', null, h('select', { value: u.papel, 'aria-label': 'Camada de ' + u.nome, onChange: function (e) { atualizar(u.id, { papel: e.target.value }); } },
+              ['equipe', 'admin', 'superadmin'].map(function (x) { return h('option', { key: x, value: x }, ROTULO_PAPEL[x]); }))),
+            h('td', null, u.papel === 'superadmin' ? 'Todas' : empresas.map(function (e) {
+              return h('label', { key: e.id, className: 'k1-row', style: { gap: 4, fontSize: 12 } },
+                h('input', { type: 'checkbox', checked: (u.empresas || []).indexOf(e.id) >= 0, onChange: function () { alternarEmpresaDe(u, e.id); } }), e.nome);
+            })),
+            h('td', { className: 'mono', style: { fontSize: 12 } }, u.ultimoLogin ? quandoBr(u.ultimoLogin) : 'nunca'),
+            h('td', null, h('div', { className: 'k1-row' },
+              h(K.Button, { variant: 'secondary', onClick: function () { atualizar(u.id, { ativo: !u.ativo }); } }, u.ativo ? 'Desativar' : 'Ativar'),
+              h(K.Button, { variant: 'ghost', onClick: function () { setRedef({ id: u.id, nome: u.nome, senha: '' }); } }, 'Redefinir senha'))));
+        }))));
+  }
+
+  // Minha conta: o usuário troca a própria senha.
+  function MinhaConta(p) {
+    var sa = useState(false), aberto = sa[0], setAberto = sa[1];
+    var sv = useState({ atual: '', nova: '' }), v = sv[0], setV = sv[1];
+    var sm = useState(''), msg = sm[0], setMsg = sm[1];
+    function trocar(ev) {
+      ev.preventDefault();
+      api(p.token, 'POST', '/eu/senha', v).then(function () { setV({ atual: '', nova: '' }); setMsg('Senha alterada.'); setAberto(false); })
+        .catch(function (e) { setMsg(e.message); });
+    }
+    if (!aberto) return h(K.Button, { variant: 'ghost', onClick: function () { setAberto(true); setMsg(''); } }, 'Minha senha');
+    return h('form', { className: 'k1-row', onSubmit: trocar },
+      h('input', { type: 'password', placeholder: 'Senha atual', value: v.atual, 'aria-label': 'Senha atual', autoComplete: 'current-password', onChange: function (e) { setV(Object.assign({}, v, { atual: e.target.value })); } }),
+      h('input', { type: 'password', placeholder: 'Nova senha (10+)', value: v.nova, 'aria-label': 'Nova senha', autoComplete: 'new-password', onChange: function (e) { setV(Object.assign({}, v, { nova: e.target.value })); } }),
+      h(K.Button, { type: 'submit', disabled: !v.atual || v.nova.length < 10 }, 'Trocar'),
+      h(K.Button, { variant: 'ghost', type: 'button', onClick: function () { setAberto(false); } }, 'Cancelar'),
+      msg && h('span', { className: 'erro', role: 'alert' }, msg));
   }
 
   function App() {
@@ -943,14 +1058,18 @@
     var sl = useState(null), empresas = sl[0], setEmpresas = sl[1];
     var sa = useState(null), empresa = sa[0], setEmpresa = sa[1];
     var sb = useState('Workspace'), aba = sb[0], setAba = sb[1];
-    var si = useState(null), superadmin = si[0], setSuperadmin = si[1]; // null = verificando; true só com a chave de integração
+    var si = useState(null), eu = si[0], setEu = si[1]; // { papel, nome, ... } vindo do servidor; null enquanto carrega
     var sx = useState(false), cfgLiberada = sx[0], setCfgLiberada = sx[1];
     useEffect(function () {
-      if (!token || !empresa) return;
+      setEu(null);
+      if (!token) return;
       var vivo = true;
-      api(token, 'GET', '/empresas/' + encodeURIComponent(empresa) + '/api').then(function () { if (vivo) setSuperadmin(true); }).catch(function () { if (vivo) setSuperadmin(false); });
+      api(token, 'GET', '/eu').then(function (r) { if (vivo) setEu(r); }).catch(function () { if (vivo) setEu({ papel: 'equipe', id: null }); });
       return function () { vivo = false; };
-    }, [token, empresa]);
+    }, [token]);
+    var papelEu = eu ? eu.papel : null;
+    var superadmin = papelEu === 'superadmin' || papelEu === 'integracao';
+    var sessaoUsuario = Boolean(eu && eu.id);
     useEffect(function () {
       if (!token) return;
       api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(function (a) { return a || (l[0] && l[0].id); }); })
@@ -962,27 +1081,28 @@
     var nome = (empresas.filter(function (l) { return l.id === empresa; })[0] || {}).nome || '';
     if (empresas.length === 0) {
       return h('div', null,
-        h(K.TopBar, { logoSrc: 'logo-chatflow.png', brandSub: 'Painel', unit: '', modules: ['Atendimento', 'Alimentos e Bebidas'], active: 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+        h(K.TopBar, { logoSrc: 'logo-chatflow.png', brandSub: 'Painel', unit: '', modules: ['Atendimento', 'Alimentos e Bebidas'], active: 'Atendimento', user: (eu && eu.nome) || lerOperador() || 'Equipe', initials: ((eu && eu.nome) || lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
         h('main', { className: 'pagina' },
           h('h1', null, 'Nenhuma empresa'),
-          h(K.EmptyState, null, 'Crie a primeira empresa para começar.'),
+          h(K.EmptyState, null, superadmin || !sessaoUsuario ? 'Crie a primeira empresa para começar.' : 'Nenhuma empresa liberada para você. Peça ao superadmin.'),
           h('div', { className: 'k1-row' },
-            h(NovaEmpresa, { token: token, aoCriar: function (id) { api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(id); setAba('Configuração'); }); } }),
-            h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); setCfgLiberada(false); } }, 'Sair'))));
+            (superadmin || !sessaoUsuario) && h(NovaEmpresa, { token: token, aoCriar: function (id) { api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(id); setAba('Configuração'); }); } }),
+            h(K.Button, { variant: 'ghost', onClick: function () { if (sessaoUsuario) { api(token, 'POST', '/logout').catch(function () {}); } gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); setCfgLiberada(false); } }, 'Sair'))));
     }
     var modAtual = (empresas.filter(function (l) { return l.id === empresa; })[0] || {}).modulos || { reservas: true, conhecimento: true };
-    var abas = [].concat(modAtual.reservas ? ['Workspace', 'Mapa de mesas'] : [], ['Configuração', 'Agentes'], modAtual.conhecimento ? ['Conhecimento'] : [], superadmin ? ['API', 'Histórico'] : []);
+    var abas = [].concat(modAtual.reservas ? ['Workspace', 'Mapa de mesas'] : [], ['Configuração', 'Agentes'], modAtual.conhecimento ? ['Conhecimento'] : [], (superadmin ? ['API'] : []), (papelEu && papelEu !== 'equipe' ? ['Histórico'] : []), (superadmin ? ['Usuários'] : []));
     var abaAtual = abas.indexOf(aba) >= 0 ? aba : abas[0];
-    var tela = abaAtual === 'Workspace' ? Reservas : abaAtual === 'Mapa de mesas' ? Mapa : abaAtual === 'Configuração' ? Configuracao : abaAtual === 'Histórico' ? Historico : abaAtual === 'API' ? ApiEmpresa : abaAtual === 'Conhecimento' ? Conhecimento : Agentes;
+    var tela = abaAtual === 'Workspace' ? Reservas : abaAtual === 'Mapa de mesas' ? Mapa : abaAtual === 'Configuração' ? Configuracao : abaAtual === 'Histórico' ? Historico : abaAtual === 'API' ? ApiEmpresa : abaAtual === 'Usuários' ? Usuarios : abaAtual === 'Conhecimento' ? Conhecimento : Agentes;
     return h('div', null,
-      h(K.TopBar, { logoSrc: 'logo-chatflow.png', brandSub: 'Painel', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Alimentos e Bebidas'] : ['Atendimento'], active: modAtual.reservas && ['Workspace', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Alimentos e Bebidas' : 'Atendimento', user: lerOperador() || 'Equipe', initials: (lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+      h(K.TopBar, { logoSrc: 'logo-chatflow.png', brandSub: 'Painel', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Alimentos e Bebidas'] : ['Atendimento'], active: modAtual.reservas && ['Workspace', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Alimentos e Bebidas' : 'Atendimento', user: (eu && eu.nome) || lerOperador() || 'Equipe', initials: ((eu && eu.nome) || lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
       h(K.Tabs, { items: abas, value: abaAtual, onChange: setAba }),
       h('main', { className: 'pagina' },
         h('div', { className: 'k1-row' }, h('h1', null, abaAtual + ' · ' + nome),
           h('div', { style: { maxWidth: '100%', overflowX: 'auto' } }, h(K.Segmented, { items: empresas.map(function (l) { return l.nome; }), value: nome, onChange: function (n) { var l = empresas.filter(function (x) { return x.nome === n; })[0]; if (l) setEmpresa(l.id); } })),
           h(NovaEmpresa, { token: token, aoCriar: function (id) { api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(id); setAba('Configuração'); }); } }),
-          h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); setCfgLiberada(false); } }, 'Sair')),
-        h(abaAtual === 'Configuração' && superadmin !== true && !cfgLiberada ? SenhaConfig : tela, { aoLiberar: function () { setCfgLiberada(true); }, token: token, empresa: empresa, empresas: empresas, aoRenomear: recarregarEmpresas, aoExcluir: aposExcluir, key: abaAtual + empresa })));
+          sessaoUsuario && h(MinhaConta, { token: token }),
+          h(K.Button, { variant: 'ghost', onClick: function () { if (sessaoUsuario) { api(token, 'POST', '/logout').catch(function () {}); } gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); setCfgLiberada(false); } }, 'Sair')),
+        h(abaAtual === 'Configuração' && !superadmin && !cfgLiberada ? SenhaConfig : tela, { sessaoUsuario: sessaoUsuario, aoLiberar: function () { setCfgLiberada(true); }, token: token, empresa: empresa, empresas: empresas, aoRenomear: recarregarEmpresas, aoExcluir: aposExcluir, key: abaAtual + empresa })));
   }
 
   ReactDOM.createRoot(document.getElementById('root')).render(h(App));

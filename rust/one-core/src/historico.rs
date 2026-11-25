@@ -9,6 +9,8 @@ use serde_json::Map;
 pub struct Ator {
     pub papel: String,
     pub operador: Option<String>,
+    /// Usuário logado: nome e id vêm da sessão (o cabeçalho `X-Operador` é ignorado).
+    pub usuario: Option<(String, String)>,
 }
 
 impl Ator {
@@ -18,18 +20,33 @@ impl Ator {
         Self {
             papel: papel.to_string(),
             operador: if op.is_empty() { None } else { Some(op) },
+            usuario: None,
+        }
+    }
+
+    /// Ator de um usuário com login: `(id, nome)`.
+    pub fn de_usuario(papel: &str, id: &str, nome: &str) -> Self {
+        Self {
+            papel: papel.to_string(),
+            operador: Some(nome.to_string()),
+            usuario: Some((id.to_string(), nome.to_string())),
         }
     }
 
     /// Os pares `papel` e `operador`, para espalhar num evento (como `...ator` do JavaScript).
     pub fn pares(&self) -> Vec<(&'static str, Json)> {
-        vec![
+        let mut v = vec![
             ("papel", Json::from(self.papel.clone())),
             (
                 "operador",
                 self.operador.clone().map_or(Json::Null, Json::from),
             ),
-        ]
+        ];
+        if let Some((id, nome)) = &self.usuario {
+            v.push(("usuarioId", Json::from(id.clone())));
+            v.push(("usuarioNome", Json::from(nome.clone())));
+        }
+        v
     }
 }
 

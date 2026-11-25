@@ -8,7 +8,7 @@ pub mod modelo;
 pub mod plataforma;
 
 pub use memoria::{Memoria, iguais_tempo_constante};
-pub use modelo::{Ambiente, Chave, Empresa, Mesa, Modulos, Reserva};
+pub use modelo::{Ambiente, Chave, Credencial, Empresa, Mesa, Modulos, Reserva, Sessao, Usuario};
 pub use plataforma::{Plataforma, iso_ms};
 pub use serde_json::Value as Json;
 
@@ -218,6 +218,35 @@ pub trait Repositorio: Send + Sync {
         empresa_id: &str,
         id: i64,
     ) -> impl Future<Output = Option<Json>> + Send;
+
+    // ---------- usuários e sessões (login individual por camada) ----------
+    /// `Err(())` se o e-mail (já em minúsculas) está em uso. As empresas inexistentes são ignoradas.
+    fn usuario_criar(&self, u: Usuario) -> impl Future<Output = Result<Usuario, ()>> + Send;
+    fn usuario_por_email(&self, email: &str) -> impl Future<Output = Option<Usuario>> + Send;
+    fn usuario_obter(&self, id: &str) -> impl Future<Output = Option<Usuario>> + Send;
+    fn usuario_listar(&self) -> impl Future<Output = Vec<Usuario>> + Send;
+    /// Muda só o que veio; devolve o usuário ou `None` se não existe.
+    fn usuario_atualizar(
+        &self,
+        id: &str,
+        nome: Option<String>,
+        papel: Option<String>,
+        ativo: Option<bool>,
+        empresas: Option<Vec<String>>,
+    ) -> impl Future<Output = Option<Usuario>> + Send;
+    fn usuario_senha_definir(&self, id: &str, c: Credencial) -> impl Future<Output = bool> + Send;
+    fn usuario_login_marcar(&self, id: &str, quando: &str) -> impl Future<Output = ()> + Send;
+    fn usuario_superadmins_ativos(&self) -> impl Future<Output = Vec<String>> + Send;
+    fn sessao_criar(&self, hash: &str, s: Sessao) -> impl Future<Output = ()> + Send;
+    fn sessao_por_hash(&self, hash: &str) -> impl Future<Output = Option<Sessao>> + Send;
+    fn sessao_reautenticar(&self, hash: &str, quando: &str) -> impl Future<Output = ()> + Send;
+    fn sessao_remover(&self, hash: &str) -> impl Future<Output = ()> + Send;
+    /// Remove as sessões do usuário, exceto a de hash `exceto` (troca de senha mantém a atual).
+    fn sessoes_remover_do_usuario(
+        &self,
+        usuario_id: &str,
+        exceto: Option<&str>,
+    ) -> impl Future<Output = ()> + Send;
 
     // ---------- histórico (só acrescenta) ----------
     fn historico_acrescentar(&self, ev: Json) -> impl Future<Output = Json> + Send;

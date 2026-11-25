@@ -12,6 +12,7 @@ pub mod mapa;
 pub mod nucleo;
 pub mod reservas;
 pub mod tempo;
+pub mod usuarios;
 pub mod util;
 
 pub use nucleo::{

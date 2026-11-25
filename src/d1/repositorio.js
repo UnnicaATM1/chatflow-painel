@@ -2,6 +2,7 @@ import { gerarCodigoReserva, plataformaWeb } from '../plataforma.js';
 import { IDEMPOTENCIA_MAX_PADRAO, IDEMPOTENCIA_TTL_PADRAO_MS } from '../repositorio.js';
 import { prepararReservaSemeada } from '../reservas.js';
 import { fusoDe, minutosAbsolutos, parede } from '../tempo.js';
+import { operacoesUsuariosD1 } from './usuarios.js';
 
 const MODULOS = { reservas: true, conhecimento: true };
 const CONFLITO = { ok: false, motivo: 'conflito' };
@@ -473,7 +474,7 @@ export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHA
     };
     if (tx) return { plat, ...leituras, ...escritas };
 
-    const store = { plat, ...leituras, transacao };
+    const store = { plat, ...leituras, ...operacoesUsuariosD1(db, plat), transacao };
     for (const nome of Object.keys(escritas)) {
       store[nome] = (...args) => transacao((interno) => interno[nome](...args));
     }

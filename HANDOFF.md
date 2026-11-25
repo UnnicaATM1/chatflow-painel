@@ -1,17 +1,18 @@
 # 🔄 Handoff de Turno — ChatFlow Painel
-> Última atualização: 2026-11-22 — por: Codex
+> Última atualização: 2026-11-25 — por: Claude (T00)
 
 ## 📊 Status
 
 <!-- STATUS_START -->
 design-system: 60%
 telas-referencia: 100%
-frontend: 76%
-backend: 95%
+frontend: 80%
+backend: 96%
 planejamento-tela-01: 100%
 api-rust: 96%
 worker-sites: 95%
-geral: 76%
+usuarios-camadas: 90%
+geral: 78%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -26,9 +27,8 @@ Regras deste bloco, sempre seguir:
 
 ## 📍 Onde paramos
 
-TASK-004: Worker e painel na mesma origem, com D1/R2 integrados e migrações no artefato do Sites. Miniflare validou 42 casos HTTP com D1/R2 e confirmou concorrência sem dupla reserva e persistência de empresa, reserva e anexo após reinício.
-TASK-003 (Banco, T002): Contrato C entregue em src/d1/repositorio.js. criarStoreD1(env) usa env.DB (D1), env.BUCKET (R2 privado) e env.CHATFLOW_FUSO; migrações em src/d1/migrations (0001, 0002_revisao). Atomicidade por revisão global conferida na primeira instrução do batch(), detalhada em docs/atomicidade.md. Testes Miniflare em tests/d1.test.js: pedidos concorrentes sem dupla reserva, falha de auditoria reverte o lote, anexo de 4 MiB no R2. CHATFLOW_TESTE_OPERACAO=1 npm test: 151/151. Lacunas: homologação hospedada, vazão sob contenção da revisão global e conciliação de órfãos do R2.
-O Worker D1/R2 foi publicado no Sites público (versão 3, commit ca140c91836fa06a96ba1ceebcce8de2d0dd2740, runtime revisão 7). Acesso anônimo confirmado: `/saude` 200 JSON, `/empresas` 401 JSON do ONE e `/app/` 200.
+Feature 002 (Reversa, `_reversa_forward/002-usuarios-por-camada`): usuários com e-mail e senha próprios por camada (`equipe`, `admin`, `superadmin`) implementada em JS (memória, SQLite, D1), no painel (`web/app.js`) e em Rust (paridade). 34 ações fechadas; sem commit nem push desta feature ainda. Verificação: `CHATFLOW_TESTE_OPERACAO=1 npm test`, `npm run test:worker`, `npm run test:worker:d1`, régua `tests/api.test.js` contra o binário Rust e `node tests/diferencial-usuarios.js` (65 chamadas, 0 diferenças JS x Rust) verdes; clippy limpo. Painel conferido no navegador contra servidor local de teste. Regras de camada e rotas em `docs/usuarios-e-camadas.md`.
+Site `https://chatflow-painel.joaolopes.chatgpt.site` segue com a versão anterior (tokens do env): só passa a ter usuários depois de republicar com este código e de aplicar a migração `0003_usuarios` no D1 (vai no artefato do Sites). NicoChat: `one_url` já aponta para o site e os 4 fluxos ONE estão publicados; `#one` segue inativa até `one_chave` (chave `k1_…` da empresa, gerada na aba API por quem é superadmin) e `one_empresa` estarem certos. Empresas do Grupo Beto Cunha (PARK FOZ, BOUTIQUE DE CARNES BETO CUNHA, BLACK BILL SMOKERHOUSE) foram criadas pelo João no painel; dados cadastrais em `Documents\chatflow-chaves\empresas-cadastro.md` (fora do repositório).
 
 ## ✅ Pendências ativas
 
@@ -47,7 +47,8 @@ O Worker D1/R2 foi publicado no Sites público (versão 3, commit ca140c91836fa0
 - [ ] Homologar no painel A&B/Atendimento as rotas de gestão de ambientes e mesas e de exclusão definitiva, incluindo 409 com os códigos de reserva ativos
 - [ ] Front A&B/Atendimento: validar modo escuro e layout móvel
 
-- [ ] Rastreabilidade por pessoa real: hoje o histórico guarda o papel do token (confiável) e o nome digitado no login (`X-Operador`, só um rótulo); para auditoria forte, emitir um token por usuário
+- [ ] Publicar a feature 002 no Sites (republicar o commit) e, com `CHATFLOW_TOKEN_INTEGRACAO` forte, criar o primeiro superadmin em `POST /usuarios` (ou na aba Usuários) e depois os usuários de cada empresa; só então aposentar o uso diário dos tokens do env (ficam como acesso de emergência). Eventos feitos por token do env ainda usam o rótulo `X-Operador`.
+- [ ] Usuários: limite de tentativas de login é em memória por isolate (tabela `login_falhas` no D1 não foi feita) e não há recuperação de senha por e-mail; no Rust os usuários ficam só em memória
 
 - [ ] Configurar HTTPS e chaves de API por empresa no deploy, com o token global de chat desativado
 - [ ] Exclusão de empresa: trocar a senha do administrador por algo forte (a atual tem 6 caracteres; o bloqueio de 5 erros / 15 min mitiga, mas é fraca) e, quando houver contas, trocar a senha única por login real de administrador; avaliar "restaurar empresa excluída" a partir do instantâneo gravado no histórico
@@ -71,6 +72,8 @@ O Worker D1/R2 foi publicado no Sites público (versão 3, commit ca140c91836fa0
 - [ ] Definir validade e teto de idempotência para o uso do NicoChat e planejar limpeza periódica no D1
 
 ## 🧠 Aprendizados importantes
+
+- Usuários: token de sessão `s1_…` (só o hash fica guardado), PBKDF2-SHA256 100000 iterações por `crypto.subtle` em `src/usuarios.js` (o teto do Workers); equipe e admin reautenticam por 5 min para PATCH de empresa e módulos; excluir empresa usa a senha do próprio usuário. Em Python no Windows, gravar arquivo com `open(..., 'w')` troca LF por CRLF e quebra o teste "núcleo sem Node": use `newline=''`.
 
 - O Worker usa os bindings `DB` e `BUCKET` do Sites. Com os dois ausentes, o modo local usa memória. O rate limit continua por isolate com D1.
 - D1 não tem transação interativa: o repositório calcula os efeitos e envia um batch cuja primeira instrução avança uma revisão global só se ela não mudou (CHECK nomeado reverte o lote); em conflito repete até 40 vezes. Limite conhecido: escritas simultâneas de empresas diferentes disputam a mesma revisão.

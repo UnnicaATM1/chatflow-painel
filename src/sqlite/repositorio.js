@@ -8,6 +8,7 @@ import { prepararReservaSemeada } from '../reservas.js';
 import { fusoDe, minutosAbsolutos, parede } from '../tempo.js';
 import { limparIdempotencia } from './idempotencia-limpeza.js';
 import { aplicarMigracoesSqlite } from './migracoes.js';
+import { operacoesUsuariosSqlite } from './usuarios.js';
 
 const MODULOS_PADRAO = { reservas: true, conhecimento: true };
 const CONFLITO = { ok: false, motivo: 'conflito' };
@@ -517,6 +518,7 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
       });
     },
     async tentativasAdminObter() { return { ...(obter('SELECT n, ate FROM tentativas_admin WHERE id = 1') || { n: 0, ate: 0 }) }; },
+    ...operacoesUsuariosSqlite({ obter, listar, gravar, transacionar, p }),
     async tentativasAdminGravar({ n, ate }) {
       gravar('INSERT INTO tentativas_admin (id, n, ate) VALUES (1, ?, ?) ON CONFLICT (id) DO UPDATE SET n = excluded.n, ate = excluded.ate', n, ate);
     },
