@@ -1081,7 +1081,7 @@
     var nome = (empresas.filter(function (l) { return l.id === empresa; })[0] || {}).nome || '';
     if (empresas.length === 0) {
       return h('div', null,
-        h(K.TopBar, { logoSrc: 'logo-chatflow.png', brandSub: 'Painel', unit: '', modules: ['Atendimento', 'Alimentos e Bebidas'], active: 'Atendimento', user: (eu && eu.nome) || lerOperador() || 'Equipe', initials: ((eu && eu.nome) || lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+        h(K.TopBar, { logoSrc: 'logo-chatflow.png', brandSub: 'Painel', unit: '', modules: ['Atendimento', 'Estrutura de Negócio'], active: 'Atendimento', user: (eu && eu.nome) || lerOperador() || 'Equipe', initials: ((eu && eu.nome) || lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
         h('main', { className: 'pagina' },
           h('h1', null, 'Nenhuma empresa'),
           h(K.EmptyState, null, superadmin || !sessaoUsuario ? 'Crie a primeira empresa para começar.' : 'Nenhuma empresa liberada para você. Peça ao superadmin.'),
@@ -1094,7 +1094,7 @@
     var abaAtual = abas.indexOf(aba) >= 0 ? aba : abas[0];
     var tela = abaAtual === 'Workspace' ? Reservas : abaAtual === 'Mapa de mesas' ? Mapa : abaAtual === 'Configuração' ? Configuracao : abaAtual === 'Histórico' ? Historico : abaAtual === 'API' ? ApiEmpresa : abaAtual === 'Usuários' ? Usuarios : abaAtual === 'Conhecimento' ? Conhecimento : Agentes;
     return h('div', null,
-      h(K.TopBar, { logoSrc: 'logo-chatflow.png', brandSub: 'Painel', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Alimentos e Bebidas'] : ['Atendimento'], active: modAtual.reservas && ['Workspace', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Alimentos e Bebidas' : 'Atendimento', user: (eu && eu.nome) || lerOperador() || 'Equipe', initials: ((eu && eu.nome) || lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
+      h(K.TopBar, { logoSrc: 'logo-chatflow.png', brandSub: 'Painel', unit: nome, modules: modAtual.reservas ? ['Atendimento', 'Estrutura de Negócio'] : ['Atendimento'], active: modAtual.reservas && ['Workspace', 'Mapa de mesas', 'Configuração'].indexOf(abaAtual) >= 0 ? 'Estrutura de Negócio' : 'Atendimento', user: (eu && eu.nome) || lerOperador() || 'Equipe', initials: ((eu && eu.nome) || lerOperador() || 'EQ').slice(0, 2).toUpperCase() }),
       h(K.Tabs, { items: abas, value: abaAtual, onChange: setAba }),
       h('main', { className: 'pagina' },
         h('div', { className: 'k1-row' }, h('h1', null, abaAtual + ' · ' + nome),
