@@ -921,14 +921,31 @@
       msg && h('span', { className: 'erro', role: 'alert' }, msg));
   }
 
+  // Configuração: a equipe da empresa digita de novo a senha de acesso; só o superadmin (integração) entra direto.
+  function SenhaConfig(p) {
+    var sv = useState(''), v = sv[0], setV = sv[1];
+    var sm = useState(''), msg = sm[0], setMsg = sm[1];
+    function conferir(e) {
+      e.preventDefault();
+      if (v === p.token) { setV(''); p.aoLiberar(); } else { setMsg('Senha incorreta.'); }
+    }
+    return h('section', { className: 'painel k1-stack' },
+      h('h2', null, 'Configuração protegida'),
+      h('div', { className: 'rotulo' }, 'Digite novamente a sua senha de acesso para abrir esta aba.'),
+      h('form', { className: 'k1-row', onSubmit: conferir },
+        h('input', { type: 'password', value: v, autoComplete: 'off', 'aria-label': 'Senha de acesso', placeholder: 'Senha de acesso', onChange: function (e) { setV(e.target.value); setMsg(''); } }),
+        h(K.Button, { type: 'submit', disabled: !v }, 'Abrir'),
+        msg && h('span', { className: 'erro', role: 'alert' }, msg)));
+  }
+
   function App() {
     var st = useState(lerToken()), token = st[0], setToken = st[1];
     var sl = useState(null), empresas = sl[0], setEmpresas = sl[1];
     var sa = useState(null), empresa = sa[0], setEmpresa = sa[1];
     var sb = useState('Workspace'), aba = sb[0], setAba = sb[1];
-    var si = useState(false), superadmin = si[0], setSuperadmin = si[1]; // só a chave de integração enxerga a aba API
+    var si = useState(null), superadmin = si[0], setSuperadmin = si[1]; // null = verificando; true só com a chave de integração
+    var sx = useState(false), cfgLiberada = sx[0], setCfgLiberada = sx[1];
     useEffect(function () {
-      setSuperadmin(false);
       if (!token || !empresa) return;
       var vivo = true;
       api(token, 'GET', '/empresas/' + encodeURIComponent(empresa) + '/api').then(function () { if (vivo) setSuperadmin(true); }).catch(function () { if (vivo) setSuperadmin(false); });
@@ -951,7 +968,7 @@
           h(K.EmptyState, null, 'Crie a primeira empresa para começar.'),
           h('div', { className: 'k1-row' },
             h(NovaEmpresa, { token: token, aoCriar: function (id) { api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(id); setAba('Configuração'); }); } }),
-            h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); } }, 'Sair'))));
+            h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); setCfgLiberada(false); } }, 'Sair'))));
     }
     var modAtual = (empresas.filter(function (l) { return l.id === empresa; })[0] || {}).modulos || { reservas: true, conhecimento: true };
     var abas = [].concat(modAtual.reservas ? ['Workspace', 'Mapa de mesas'] : [], ['Configuração', 'Agentes'], modAtual.conhecimento ? ['Conhecimento'] : [], superadmin ? ['API', 'Histórico'] : []);
@@ -964,8 +981,8 @@
         h('div', { className: 'k1-row' }, h('h1', null, abaAtual + ' · ' + nome),
           h('div', { style: { maxWidth: '100%', overflowX: 'auto' } }, h(K.Segmented, { items: empresas.map(function (l) { return l.nome; }), value: nome, onChange: function (n) { var l = empresas.filter(function (x) { return x.nome === n; })[0]; if (l) setEmpresa(l.id); } })),
           h(NovaEmpresa, { token: token, aoCriar: function (id) { api(token, 'GET', '/empresas').then(function (l) { setEmpresas(l); setEmpresa(id); setAba('Configuração'); }); } }),
-          h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); } }, 'Sair')),
-        h(tela, { token: token, empresa: empresa, empresas: empresas, aoRenomear: recarregarEmpresas, aoExcluir: aposExcluir, key: abaAtual + empresa })));
+          h(K.Button, { variant: 'ghost', onClick: function () { gravarToken(''); gravarOperador(''); setToken(''); setEmpresas(null); setCfgLiberada(false); } }, 'Sair')),
+        h(abaAtual === 'Configuração' && superadmin !== true && !cfgLiberada ? SenhaConfig : tela, { aoLiberar: function () { setCfgLiberada(true); }, token: token, empresa: empresa, empresas: empresas, aoRenomear: recarregarEmpresas, aoExcluir: aposExcluir, key: abaAtual + empresa })));
   }
 
   ReactDOM.createRoot(document.getElementById('root')).render(h(App));
