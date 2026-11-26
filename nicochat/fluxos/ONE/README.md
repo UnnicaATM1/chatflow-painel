@@ -2,7 +2,7 @@
 
 Pasta de fluxos "ONE" (workspace Unnicaflow, canal Chatflow). Aqui ficam os arquivos prontos para
 criar ou importar no NicoChat. O NicoChat foi conectado como MCP depois que a sessão de trabalho
-começou, então nada foi criado lá ainda: estes arquivos são o que falta colocar na pasta de fluxos dele.
+começou. Estes arquivos são o modelo neutro; a montagem que está no ar está descrita mais abaixo.
 
 ## Como funciona
 
@@ -15,7 +15,7 @@ começou, então nada foi criado lá ainda: estes arquivos são o que falta colo
      `one_reservar` (grava a reserva com nome e contato do cliente).
 3. A resposta ao cliente é montada pela IA com os dados que o ONE devolveu.
 
-O `#one` não faz parte do funcionamento: é só um jeito opcional de disparar um teste manual.
+No desenho de produção, toda conversa nova busca o contexto. Na fase de teste atual, quem inicia o fluxo é o `#one`.
 
 ## O que tem aqui
 
@@ -52,9 +52,33 @@ Sem `--reservar` a reserva NÃO é gravada. Sem `--fala`, roda uma conversa de e
 NicoChat faz (entender a frase) é por palavras-chave aqui, só para provar a comunicação. Códigos de saída:
 0 tudo certo, 1 falha, 2 faltou argumento.
 
+## Montagem que funcionou no NicoChat (PARK FOZ, 2026-11-26)
+
+Padrão a repetir em cada canal (um canal por empresa):
+
+1. Hotword `start_with #one` abre o sub-fluxo de conversa.
+2. GET `{{one_url}}/empresas/{{one_empresa}}/contexto` com o cabeçalho `Authorization: Bearer {{one_chave}}`.
+   `one_url`, `one_empresa` e `one_chave` são campos do bot (do canal). A chave é colada só na tela do NicoChat.
+3. Mapeamentos da resposta:
+
+| Caminho | Variável do contato | Tipo |
+|---|---|---|
+| `$.agente` | `one_agente` | JSON (`array`, até 20.000 caracteres) |
+| `$.empresa.nome` | `one_empresa_nome` | texto |
+| `$.recursos.reservas` | `one_reservas` | texto |
+
+4. Rota `2` vai para o bloco Agente de IA. Rotas `0`, `4`, `5` e a saída padrão avisam a falha, esperam a
+   próxima mensagem e consultam de novo. Confira as ligações na versão publicada.
+5. Nos textos do agente, use o ID da variável, como `{{<id de one_agente> :: $.nome}}`. Cada canal tem IDs
+   próprios. No teste, o nome da variável não foi substituído quando o agente foi editado pelo MCP.
+6. Regras do agente: apresentar-se só na primeira resposta; nunca enviar marcador sem valor; só falar de
+   mesa quando `one_reservas` for `true`.
+
+O que não funcionou: gravar a resposta inteira (`$`) em uma variável Long JSON e ler com `:: $.caminho`.
+
+Ainda sem prova de ponta a ponta: busca no conhecimento, disponibilidade e reserva.
+
 ## Pendente
 
-- Reabrir a sessão (`claude --continue`) para carregar as ferramentas do MCP do NicoChat e criar o fluxo
-  na pasta de fluxos dele (Unnicaflow, canal Chatflow).
-- Publicar o ONE em um endereço público (servidor ou túnel) para o NicoChat conseguir chamar.
-- Adaptar `fluxo-one.json` e as functions ao formato de importação do NicoChat.
+- Cadastrar o conhecimento e testar a busca; testar disponibilidade e reserva em empresa com mesas.
+- Repetir a montagem nos canais das outras empresas.
