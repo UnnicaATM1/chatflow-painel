@@ -12,6 +12,12 @@ Cada pessoa entra com **e-mail e senha próprios**. O servidor sabe quem é e gr
 
 Tudo é imposto no servidor (`src/nucleo.js` e `rust/one-core/src/nucleo.rs`), não só na tela.
 
+## Onde mudar as permissões
+
+No JS, todas as decisões de camada estão em **`src/permissoes.js`**: uma tabela `PERMISSOES` com cada ação (`historico.ver`, `api.gerir`, `usuarios.gerir`, `empresa.excluir` e outras) e a lista das camadas que podem fazê-la. Para liberar ou bloquear algo, edite a lista da ação ali. O núcleo só pergunta `podeFazer(papel, 'ação')`. A matriz esperada fica em `tests/permissoes.test.js`: se você mudar a tabela de propósito, atualize a matriz no mesmo commit e rode `npm test`.
+
+O Rust (`rust/one-core`) ainda repete essas regras à mão; ao mudar uma permissão, mude também lá e rode `node tests/diferencial-usuarios.js`.
+
 ## Acesso de emergência e integrações (não mudaram)
 
 - `CHATFLOW_TOKEN_CLIENTE` (papel `cliente`) e `CHATFLOW_TOKEN_INTEGRACAO` (papel `integracao`, equivale a superadmin) continuam valendo. O primeiro superadmin é criado usando o token de integração em `POST /usuarios`.

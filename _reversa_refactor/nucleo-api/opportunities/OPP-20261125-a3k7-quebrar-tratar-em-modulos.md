@@ -14,7 +14,7 @@ roi:
   impact: todo pedido da API passa por aqui e é o arquivo que mais muda (9 commits em 90 dias); cada rota nova aumenta o risco de regressão de permissão
   cost: medium
   est_return: rotas de sessão e de usuários isoladas em arquivos próprios, revisão de permissão por arquivo e menos conflito entre features
-state: proposed
+state: applied
 traceability:
   soul: []
   specs: [_reversa_forward/002-usuarios-por-camada/interfaces/usuarios-http.md]

@@ -1,0 +1,39 @@
+diff --git a/src/nucleo.js b/src/nucleo.js
+index 24ce63b..54a771f 100644
+--- a/src/nucleo.js
++++ b/src/nucleo.js
+@@ -314,7 +314,7 @@ export async function tratar(req, ctx) {
+       if (!u || !ok || !u.ativo) return resp(401, { erro: 'e-mail ou senha inválidos' });
+       const token = 's1_' + plat.aleatorio(32);
+       const agoraMs = ctx.agora();
+-      await store.sessaoCriar({ tokenHash: await plat.sha256Hex(token), usuarioId: u.id, criadaEm: new Date(agoraMs).toISOString(), expiraEm: new Date(agoraMs + SESSAO_MS).toISOString() });
++      await store.sessaoCriar({ tokenHash: await hashChave(token), usuarioId: u.id, criadaEm: new Date(agoraMs).toISOString(), expiraEm: new Date(agoraMs + SESSAO_MS).toISOString() });
+       await store.usuarioLoginMarcar(u.id, new Date(agoraMs).toISOString());
+       return resp(200, { token, usuario: { id: u.id, nome: u.nome, email: u.email, papel: u.papel, empresas: u.empresas } });
+     }
+@@ -458,7 +458,7 @@ export async function tratar(req, ctx) {
+         const chave = 'k1_' + plat.aleatorio(32);
+         const antes = l.chave ? { prefixo: l.chave.prefixo } : {};
+         const nova = { hash: await hashChave(chave), prefixo: chave.slice(0, 11), criadaEm: new Date(plat.agora()).toISOString() };
+-          await store.chaveDefinir(l.id, nova);
++        await store.chaveDefinir(l.id, nova);
+         await registrar(store, { empresaId: l.id, entidade: 'api', entidadeId: 'chave', acao: 'chave_gerada', ...quem(req, papel, auth), antes, depois: { prefixo: nova.prefixo } });
+         return resp(201, { chave, prefixo: nova.prefixo, criadaEm: nova.criadaEm });
+       }
+@@ -591,11 +591,11 @@ export async function tratar(req, ctx) {
+       if (partes.length === 5 && partes[4] === 'arquivo' && req.metodo === 'GET') {
+         const a = await conhecimento.arquivoDe(store, eid, itemId);
+         return { status: 200, headers: {
+-        'Content-Type': a.mime,
+-        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(a.nome)}`,
+-        'X-Content-Type-Options': 'nosniff',
+-        'Content-Security-Policy': 'sandbox',
+-      }, corpo: a.buffer };
++          'Content-Type': a.mime,
++          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(a.nome)}`,
++          'X-Content-Type-Options': 'nosniff',
++          'Content-Security-Policy': 'sandbox',
++        }, corpo: a.buffer };
+       }
+     }
+     if (partes[0] !== 'empresas' || partes.length !== 3) return resp(404, { erro: 'rota inexistente' });

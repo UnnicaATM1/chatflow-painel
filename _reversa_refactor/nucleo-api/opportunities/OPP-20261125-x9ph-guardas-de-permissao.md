@@ -14,7 +14,7 @@ roi:
   impact: permissão é o ponto mais perigoso de esquecer ao criar rota nova; centralizar reduz o risco
   cost: low
   est_return: guardas nomeadas (`exigirStaff`, `exigirSuperadmin`, `exigirReautenticacao`) e `empresaId` calculado uma vez
-state: proposed
+state: applied
 traceability:
   soul: []
   specs: [docs/usuarios-e-camadas.md#camadas]

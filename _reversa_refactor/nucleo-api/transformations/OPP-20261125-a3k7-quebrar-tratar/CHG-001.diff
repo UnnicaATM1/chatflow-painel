@@ -1,0 +1,155 @@
+--- C:\Users\JOAOLO~1\AppData\Local\Temp/nucleo.passo3.js	2026-11-25 20:31:09.198056100 -0300
++++ src/nucleo.js	2026-11-25 20:31:38.607505600 -0300
+@@ -15,7 +15,9 @@
+ import { contexto, recursosDe } from './contexto.js';
+ import { fusoDe } from './tempo.js';
+ import { codigoReservaValido } from './plataforma.js';
+-import { conferirSenha, criarCredencial, ehAdmin, ehSuperadmin, normalizarEmail, validarNovoUsuario, validarSenhaNova, PAPEIS_USUARIO } from './usuarios.js';
++import { conferirSenha, ehSuperadmin, PAPEIS_USUARIO } from './usuarios.js';
++import { rotaLogin, rotasSessao } from './rotas-sessao.js';
++import { rotasUsuarios } from './rotas-usuarios.js';
+ 
+ export const LIMITE_CORPO = 512 * 1024; // 5 campos de texto somam até ~49 mil caracteres
+ export const LIMITE_CORPO_ARQUIVO = 6 * 1024 * 1024; // documento de até 4 MB em base64
+@@ -221,7 +223,6 @@
+ 
+ // Limite de requisições em memória (janela fixa de 1 minuto).
+ const JANELA_MS = 60 * 1000;
+-const SESSAO_MS = 12 * 60 * 60 * 1000; // validade da sessão de usuário
+ const REAUTENTICACAO_MS = 5 * 60 * 1000; // quanto tempo a reautenticação vale
+ function criarLimitador(maximo) {
+   const baldes = new Map(); // chave -> { inicio, n }
+@@ -300,28 +301,16 @@
+     return bloqueada ? resp(429, { erro: 'muitas tentativas; tente novamente em instantes' }, { 'Retry-After': String(bloqueada.retryAfter) }) : null;
+   };
+   const semPermissao = () => resp(403, { erro: 'sem permissão' });
++  // Contexto entregue aos módulos de rotas (src/rotas-*.js); o que depende da autenticação é completado depois dela.
++  const rota = { req, ctx, store, plat, resp, semPermissao, limitarLogin, hashChave, lerCorpo, ip: ipDe(req, ctx.confiarProxy) };
+   try {
+     // Preflight: sempre 204 (sem cabeçalhos CORS quando a origem não é permitida ou a variável não existe)
+     if (req.metodo === 'OPTIONS') return resp(204, null);
+     // GET /saude: sem autenticação, só { ok: true }
+     if (req.metodo === 'GET' && req.url.split('?')[0] === '/saude') return resp(200, { ok: true });
+-    // POST /login { email, senha }: sem autenticação prévia; resposta sempre genérica para falha
+-    if (req.metodo === 'POST' && req.url.split('?')[0] === '/login') {
+-      const b = await lerCorpo(req);
+-      const email = normalizarEmail(b.email);
+-      const bloqueio = limitarLogin('ip:' + ipDe(req, ctx.confiarProxy), 'email:' + email);
+-      if (bloqueio) return bloqueio;
+-      const u = email && typeof b.senha === 'string' ? await store.usuarioPorEmail(email) : null;
+-      // Sem usuário, ainda gasta o mesmo tempo de derivação para não revelar se o e-mail existe.
+-      const credencialFalsa = u ? null : { salt: '00'.repeat(16), iteracoes: 100000, senhaHash: '0'.repeat(64) };
+-      const ok = await conferirSenha(b.senha, u || credencialFalsa, plat.iguaisTempoConstante);
+-      if (!u || !ok || !u.ativo) return resp(401, { erro: 'e-mail ou senha inválidos' });
+-      const token = 's1_' + plat.aleatorio(32);
+-      const agoraMs = ctx.agora();
+-      await store.sessaoCriar({ tokenHash: await hashChave(token), usuarioId: u.id, criadaEm: new Date(agoraMs).toISOString(), expiraEm: new Date(agoraMs + SESSAO_MS).toISOString() });
+-      await store.usuarioLoginMarcar(u.id, new Date(agoraMs).toISOString());
+-      return resp(200, { token, usuario: { id: u.id, nome: u.nome, email: u.email, papel: u.papel, empresas: u.empresas } });
+-    }
++    // POST /login (src/rotas-sessao.js): sem autenticação prévia
++    const respLogin = await rotaLogin(rota);
++    if (respLogin) return respLogin;
+     const auth = await autenticar(req, ctx);
+     const limite = auth
+       ? ctx.limiteValidas.contar(await hashChave(req.headers.authorization), ctx.agora())
+@@ -351,95 +340,10 @@
+       return resp(403, { erro: 'esta chave só acessa a própria empresa' });
+     }
+ 
+-    // ---------- sessão do usuário ----------
+-    // POST /logout: encerra a sessão atual
+-    if (partes[0] === 'logout' && partes.length === 1 && req.metodo === 'POST') {
+-      if (auth.sessaoHash) await store.sessaoRemover(auth.sessaoHash);
+-      return resp(200, { ok: true });
+-    }
+-    // GET /eu: quem sou eu (o painel decide as abas por aqui); token do env responde só com o papel
+-    if (partes[0] === 'eu' && partes.length === 1 && req.metodo === 'GET') {
+-      if (auth.empresaEscopo) return semPermissao();
+-      return resp(200, doUsuario
+-        ? { id: auth.usuario.id, nome: auth.usuario.nome, email: auth.usuario.email, papel, empresas: auth.usuario.empresas, reautenticadoEm: auth.reautenticadoEm || null }
+-        : { id: null, nome: null, email: null, papel, empresas: null, reautenticadoEm: null });
+-    }
+-    // POST /eu/reautenticar { senha }
+-    if (partes[0] === 'eu' && partes[1] === 'reautenticar' && partes.length === 2 && req.metodo === 'POST') {
+-      if (!doUsuario) return resp(403, { erro: 'somente usuários com login reautenticam' });
+-      const bloqueio = limitarLogin('email:' + auth.usuario.email);
+-      if (bloqueio) return bloqueio;
+-      const b = await lerCorpo(req);
+-      if (!(await senhaDoUsuarioConfere(b.senha))) return resp(403, { erro: 'senha incorreta' });
+-      await store.sessaoReautenticar(auth.sessaoHash, new Date(ctx.agora()).toISOString());
+-      return resp(200, { ok: true });
+-    }
+-    // POST /eu/senha { atual, nova }: troca a própria senha e encerra as outras sessões
+-    if (partes[0] === 'eu' && partes[1] === 'senha' && partes.length === 2 && req.metodo === 'POST') {
+-      if (!doUsuario) return resp(403, { erro: 'somente usuários com login trocam a senha' });
+-      const bloqueio = limitarLogin('email:' + auth.usuario.email);
+-      if (bloqueio) return bloqueio;
+-      const b = await lerCorpo(req);
+-      const erroSenha = validarSenhaNova(b.nova);
+-      if (erroSenha) return resp(400, { erro: erroSenha });
+-      if (!(await senhaDoUsuarioConfere(b.atual))) return resp(403, { erro: 'senha atual incorreta' });
+-      await store.usuarioSenhaDefinir(auth.usuario.id, await criarCredencial(b.nova));
+-      await store.sessoesRemoverDoUsuario(auth.usuario.id, auth.sessaoHash);
+-      return resp(200, { ok: true });
+-    }
+-    // ---------- gestão de usuários (só superadmin) ----------
+-    if (partes[0] === 'usuarios') {
+-      if (!superadmin) return semPermissao();
+-      const idsEmpresas = async () => new Set((await store.empresaListar({ incluirConhecimento: false })).map((l) => l.id));
+-      if (partes.length === 1 && req.metodo === 'GET') return resp(200, await store.usuarioListar());
+-      if (partes.length === 1 && req.metodo === 'POST') {
+-        const corpo = await lerCorpo(req);
+-        const v = validarNovoUsuario(corpo);
+-        if (v.erro) return resp(400, { erro: v.erro });
+-        const existentes = await idsEmpresas();
+-        const desconhecida = v.empresas.find((e) => !existentes.has(e));
+-        if (desconhecida) return resp(400, { erro: `empresa inexistente: ${desconhecida}` });
+-        const cred = await criarCredencial(corpo.senha);
+-        const r = await store.usuarioCriar({ nome: v.nome, email: v.email, papel: v.papel, empresas: v.empresas, ...cred, criadoEm: new Date(ctx.agora()).toISOString() });
+-        if (r.erro) return resp(409, { erro: 'e-mail já cadastrado' });
+-        return resp(201, r);
+-      }
+-      if (partes.length >= 2) {
+-        const uid = idDe(1);
+-        const alvo = await store.usuarioObter(uid);
+-        if (!alvo) return resp(404, { erro: 'usuário inexistente' });
+-        if (partes.length === 2 && req.metodo === 'PATCH') {
+-          const b = await lerCorpo(req);
+-          const m = {};
+-          if (b.nome !== undefined) { if (typeof b.nome !== 'string' || !b.nome.trim() || b.nome.trim().length > 80) return resp(400, { erro: 'nome de 1 a 80 caracteres' }); m.nome = b.nome.trim(); }
+-          if (b.papel !== undefined) { if (!PAPEIS_USUARIO.includes(b.papel)) return resp(400, { erro: 'papel deve ser equipe, admin ou superadmin' }); m.papel = b.papel; }
+-          if (b.ativo !== undefined) { if (typeof b.ativo !== 'boolean') return resp(400, { erro: 'ativo deve ser verdadeiro ou falso' }); m.ativo = b.ativo; }
+-          if (b.empresas !== undefined) {
+-            if (!Array.isArray(b.empresas) || b.empresas.some((x) => typeof x !== 'string')) return resp(400, { erro: 'empresas deve ser uma lista de ids' });
+-            const existentes = await idsEmpresas();
+-            const desconhecida = b.empresas.find((e) => !existentes.has(e));
+-            if (desconhecida) return resp(400, { erro: `empresa inexistente: ${desconhecida}` });
+-            m.empresas = [...new Set(b.empresas)];
+-          }
+-          // Nunca ficar sem superadmin ativo.
+-          const deixaDeSer = alvo.papel === 'superadmin' && alvo.ativo && ((m.papel && m.papel !== 'superadmin') || m.ativo === false);
+-          if (deixaDeSer && (await store.usuarioSuperadminsAtivos()).filter((i) => i !== alvo.id).length === 0) {
+-            return resp(409, { erro: 'precisa existir pelo menos um superadmin ativo' });
+-          }
+-          const r = await store.usuarioAtualizar(uid, m);
+-          if (m.ativo === false || (m.papel && m.papel !== alvo.papel)) await store.sessoesRemoverDoUsuario(uid);
+-          return resp(200, r);
+-        }
+-        if (partes.length === 3 && partes[2] === 'senha' && req.metodo === 'POST') {
+-          const b = await lerCorpo(req);
+-          const erroSenha = validarSenhaNova(b.senha);
+-          if (erroSenha) return resp(400, { erro: erroSenha });
+-          await store.usuarioSenhaDefinir(uid, await criarCredencial(b.senha));
+-          await store.sessoesRemoverDoUsuario(uid);
+-          return resp(200, { ok: true });
+-        }
+-      }
+-    }
++    Object.assign(rota, { auth, papel, partes, idDe, doUsuario, superadmin, senhaDoUsuarioConfere });
++    // Sessão do usuário e gestão de usuários (src/rotas-sessao.js e src/rotas-usuarios.js)
++    const respSessao = (await rotasSessao(rota)) || (await rotasUsuarios(rota));
++    if (respSessao) return respSessao;
+     // GET /historico/excluidas: resumo das empresas excluídas (o instantâneo completo fica gravado no histórico)
+     if (partes[0] === 'historico' && partes[1] === 'excluidas' && partes.length === 2 && req.metodo === 'GET') {
+       if (!staff || (doUsuario && !superadmin)) return semPermissao();

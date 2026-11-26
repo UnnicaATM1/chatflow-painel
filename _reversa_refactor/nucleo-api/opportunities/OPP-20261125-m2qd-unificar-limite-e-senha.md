@@ -14,7 +14,7 @@ roi:
   impact: regra de segurança sensível copiada em vários lugares pode divergir; hoje são 4 chamadas a limiteLogin.contar
   cost: low
   est_return: um helper para o limite e outro para conferir a senha do usuário logado, com uma única mensagem e um único cabeçalho Retry-After
-state: proposed
+state: applied
 traceability:
   soul: []
   specs: [docs/usuarios-e-camadas.md#segurança]

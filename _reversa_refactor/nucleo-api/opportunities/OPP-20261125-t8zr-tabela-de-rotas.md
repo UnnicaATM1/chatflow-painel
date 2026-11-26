@@ -14,7 +14,7 @@ roi:
   impact: cada regra nova (como as camadas da feature 002) precisa ser escrita duas vezes; risco de divergência silenciosa
   cost: high
   est_return: uma descrição (método, caminho, camada mínima, exige reautenticação) validada por teste nos dois lados
-state: proposed
+state: approved
 traceability:
   soul: []
   specs: [_reversa_forward/002-usuarios-por-camada/interfaces/usuarios-http.md]

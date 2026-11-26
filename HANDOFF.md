@@ -27,11 +27,13 @@ Regras deste bloco, sempre seguir:
 
 ## 📍 Onde paramos
 
-Feature 002 (Reversa, `_reversa_forward/002-usuarios-por-camada`): usuários com e-mail e senha próprios por camada (`equipe`, `admin`, `superadmin`) implementada em JS (memória, SQLite, D1), no painel (`web/app.js`) e em Rust (paridade). 34 ações fechadas; sem commit nem push desta feature ainda. Verificação: `CHATFLOW_TESTE_OPERACAO=1 npm test`, `npm run test:worker`, `npm run test:worker:d1`, régua `tests/api.test.js` contra o binário Rust e `node tests/diferencial-usuarios.js` (65 chamadas, 0 diferenças JS x Rust) verdes; clippy limpo. Painel conferido no navegador contra servidor local de teste. Regras de camada e rotas em `docs/usuarios-e-camadas.md`.
-Site `https://chatflow-painel.joaolopes.chatgpt.site` segue com a versão anterior (tokens do env): só passa a ter usuários depois de republicar com este código e de aplicar a migração `0003_usuarios` no D1 (vai no artefato do Sites). NicoChat: `one_url` já aponta para o site e os 4 fluxos ONE estão publicados; `#one` segue inativa até `one_chave` (chave `k1_…` da empresa, gerada na aba API por quem é superadmin) e `one_empresa` estarem certos. Empresas do Grupo Beto Cunha (PARK FOZ, BOUTIQUE DE CARNES BETO CUNHA, BLACK BILL SMOKERHOUSE) foram criadas pelo João no painel; dados cadastrais em `Documents\chatflow-chaves\empresas-cadastro.md` (fora do repositório).
+Feature 002 (usuários com senha própria por camada) está em `main` (commit 2f6cd4f). Depois dela, o menu "Alimentos e Bebidas" do painel virou "Estrutura de Negócio" e o Reversa Refactor aplicou 4 melhorias no `src/nucleo.js` (registro em `_reversa_refactor/nucleo-api/`): padronização, helpers de limite de login e de senha, `semPermissao()` e `idDe()`, e extração das rotas de sessão e de usuários para `src/rotas-sessao.js` e `src/rotas-usuarios.js`. Além disso nasceu a camada de permissões `src/permissoes.js`: uma tabela `PERMISSOES` (ação para lista de camadas) e `podeFazer(papel, ação)`; para liberar ou bloquear algo para uma camada basta editar a lista da ação ali. A matriz fica guardada em `tests/permissoes.test.js`. Verificação: `CHATFLOW_TESTE_OPERACAO=1 npm test` (196), `npm run test:worker` (41), `npm run test:worker:d1` (42) e `node tests/diferencial-usuarios.js` (65 chamadas JS x Rust, 0 diferenças) verdes.
+Site `https://chatflow-painel.joaolopes.chatgpt.site`: precisa republicar com o commit mais novo para ter usuários, a aba Usuários e o menu novo (a migração `0003_usuarios` vai no artefato). Os três usuários de teste (equipe, admin, superadmin) já entraram; o admin só entrou depois de redefinir a senha. NicoChat: `one_url` já aponta para o site e os 4 fluxos ONE estão publicados; `#one` segue inativa até `one_chave` (chave `k1_…` da PARK FOZ, gerada na aba API por superadmin) e `one_empresa` estarem certos.
 
 ## ✅ Pendências ativas
 
+- [ ] Camada de permissões em Rust: espelhar a tabela de `src/permissoes.js` em `rust/one-core` (hoje o Rust repete as regras à mão; o diferencial garante a paridade, mas uma regra nova precisa ser escrita nos dois lados). Opportunity OPP-20261125-t8zr em `_reversa_refactor/nucleo-api/`.
+- [ ] Refactor restante do `src/nucleo.js` (rotas de empresa, agente, reservas e conhecimento ainda dentro de `tratar()`): rodar `/reversa-refactor` de novo no contexto `nucleo-api`.
 - [ ] TASK-004: validar login com João no domínio e testar criação, reabertura e limpeza de uma empresa e reserva de homologação.
 - [ ] Bloqueante antes de clientes reais ou do NicoChat: rotacionar `CHATFLOW_TOKEN_CLIENTE`, `CHATFLOW_TOKEN_INTEGRACAO` e `CHATFLOW_ADMIN_SENHA` para valores fortes e distintos. Com a mesma senha, a credencial da equipe também pode confirmar a exclusão de empresas.
 - [ ] Homologar HTTPS, proxy, volume SQLite, encerramento e recuperação após kill -9 em contêiner e restauração conjunta do banco e dos anexos conforme `docs/publicacao-producao.md`
@@ -72,6 +74,8 @@ Site `https://chatflow-painel.joaolopes.chatgpt.site` segue com a versão anteri
 - [ ] Definir validade e teto de idempotência para o uso do NicoChat e planejar limpeza periódica no D1
 
 ## 🧠 Aprendizados importantes
+
+- Permissões: toda decisão de camada vive em `src/permissoes.js` (`podeFazer(papel, 'ação')`); não escreva `papel === 'equipe'` nem listas de papéis no núcleo. Módulos novos de rotas ficam em `src/` (não em subpasta) para o teste "núcleo sem Node" varrer o arquivo.
 
 - Usuários: token de sessão `s1_…` (só o hash fica guardado), PBKDF2-SHA256 100000 iterações por `crypto.subtle` em `src/usuarios.js` (o teto do Workers); equipe e admin reautenticam por 5 min para PATCH de empresa e módulos; excluir empresa usa a senha do próprio usuário. Em Python no Windows, gravar arquivo com `open(..., 'w')` troca LF por CRLF e quebra o teste "núcleo sem Node": use `newline=''`.
 

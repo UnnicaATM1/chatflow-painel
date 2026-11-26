@@ -14,7 +14,7 @@ roi:
   impact: leitura e revisão; sem efeito em tempo de execução
   cost: low
   est_return: arquivo coerente, útil antes de extrair módulos
-state: proposed
+state: applied
 traceability:
   soul: []
   specs: []

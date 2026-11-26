@@ -1,0 +1,74 @@
+--- C:\Users\JOAOLO~1\AppData\Local\Temp/nucleo.passo4.js	2026-11-25 20:26:51.493083000 -0300
++++ src/nucleo.js	2026-11-25 20:26:55.086694700 -0300
+@@ -294,6 +294,11 @@
+   const cors = cabecalhosCors(ctx, req);
+   const resp = (status, corpo, headers) => ({ status, headers: { ...cors, ...(headers || {}) }, corpo: corpo === undefined ? null : corpo });
+   const hashChave = (c) => plat.sha256Hex(c);
++  // Limite de tentativas de login por chave ('ip:…', 'email:…'): conta todas e devolve a resposta 429 se alguma estourou (ou null).
++  const limitarLogin = (...chaves) => {
++    const bloqueada = chaves.map((c) => ctx.limiteLogin.contar(c, ctx.agora())).find((r) => !r.ok);
++    return bloqueada ? resp(429, { erro: 'muitas tentativas; tente novamente em instantes' }, { 'Retry-After': String(bloqueada.retryAfter) }) : null;
++  };
+   try {
+     // Preflight: sempre 204 (sem cabeçalhos CORS quando a origem não é permitida ou a variável não existe)
+     if (req.metodo === 'OPTIONS') return resp(204, null);
+@@ -303,10 +308,8 @@
+     if (req.metodo === 'POST' && req.url.split('?')[0] === '/login') {
+       const b = await lerCorpo(req);
+       const email = normalizarEmail(b.email);
+-      const ip = ipDe(req, ctx.confiarProxy);
+-      const lim = ctx.limiteLogin.contar('ip:' + ip, ctx.agora());
+-      const lim2 = ctx.limiteLogin.contar('email:' + email, ctx.agora());
+-      if (!lim.ok || !lim2.ok) return resp(429, { erro: 'muitas tentativas; tente novamente em instantes' }, { 'Retry-After': String((lim.ok ? lim2 : lim).retryAfter) });
++      const bloqueio = limitarLogin('ip:' + ipDe(req, ctx.confiarProxy), 'email:' + email);
++      if (bloqueio) return bloqueio;
+       const u = email && typeof b.senha === 'string' ? await store.usuarioPorEmail(email) : null;
+       // Sem usuário, ainda gasta o mesmo tempo de derivação para não revelar se o e-mail existe.
+       const credencialFalsa = u ? null : { salt: '00'.repeat(16), iteracoes: 100000, senhaHash: '0'.repeat(64) };
+@@ -339,6 +342,8 @@
+     // Configuração sensível: equipe e admin reautenticam com a própria senha (vale 5 min); superadmin e tokens do env dispensam.
+     const reautenticado = !doUsuario || superadmin || (auth.reautenticadoEm && ctx.agora() - Date.parse(auth.reautenticadoEm) <= REAUTENTICACAO_MS);
+     const exigirReautenticacao = () => resp(403, { erro: 'digite novamente a sua senha para continuar', reautenticar: true });
++    // A senha informada é a do usuário logado? (só faz sentido para sessões de usuário)
++    const senhaDoUsuarioConfere = async (senha) => typeof senha === 'string' && conferirSenha(senha, await store.usuarioObter(auth.usuario.id), plat.iguaisTempoConstante);
+     // chave de API de uma empresa só alcança as rotas dessa empresa
+     if (auth.empresaEscopo && !(partes[0] === 'empresas' && partes[1] && decodeURIComponent(partes[1]) === auth.empresaEscopo)) {
+       return resp(403, { erro: 'esta chave só acessa a própria empresa' });
+@@ -360,22 +365,22 @@
+     // POST /eu/reautenticar { senha }
+     if (partes[0] === 'eu' && partes[1] === 'reautenticar' && partes.length === 2 && req.metodo === 'POST') {
+       if (!doUsuario) return resp(403, { erro: 'somente usuários com login reautenticam' });
+-      const lim = ctx.limiteLogin.contar('email:' + auth.usuario.email, ctx.agora());
+-      if (!lim.ok) return resp(429, { erro: 'muitas tentativas; tente novamente em instantes' }, { 'Retry-After': String(lim.retryAfter) });
++      const bloqueio = limitarLogin('email:' + auth.usuario.email);
++      if (bloqueio) return bloqueio;
+       const b = await lerCorpo(req);
+-      if (typeof b.senha !== 'string' || !(await conferirSenha(b.senha, await store.usuarioObter(auth.usuario.id), plat.iguaisTempoConstante))) return resp(403, { erro: 'senha incorreta' });
++      if (!(await senhaDoUsuarioConfere(b.senha))) return resp(403, { erro: 'senha incorreta' });
+       await store.sessaoReautenticar(auth.sessaoHash, new Date(ctx.agora()).toISOString());
+       return resp(200, { ok: true });
+     }
+     // POST /eu/senha { atual, nova }: troca a própria senha e encerra as outras sessões
+     if (partes[0] === 'eu' && partes[1] === 'senha' && partes.length === 2 && req.metodo === 'POST') {
+       if (!doUsuario) return resp(403, { erro: 'somente usuários com login trocam a senha' });
+-      const lim = ctx.limiteLogin.contar('email:' + auth.usuario.email, ctx.agora());
+-      if (!lim.ok) return resp(429, { erro: 'muitas tentativas; tente novamente em instantes' }, { 'Retry-After': String(lim.retryAfter) });
++      const bloqueio = limitarLogin('email:' + auth.usuario.email);
++      if (bloqueio) return bloqueio;
+       const b = await lerCorpo(req);
+       const erroSenha = validarSenhaNova(b.nova);
+       if (erroSenha) return resp(400, { erro: erroSenha });
+-      if (typeof b.atual !== 'string' || !(await conferirSenha(b.atual, await store.usuarioObter(auth.usuario.id), plat.iguaisTempoConstante))) return resp(403, { erro: 'senha atual incorreta' });
++      if (!(await senhaDoUsuarioConfere(b.atual))) return resp(403, { erro: 'senha atual incorreta' });
+       await store.usuarioSenhaDefinir(auth.usuario.id, await criarCredencial(b.nova));
+       await store.sessoesRemoverDoUsuario(auth.usuario.id, auth.sessaoHash);
+       return resp(200, { ok: true });
+@@ -694,7 +699,7 @@
+       const b = await lerCorpo(req);
+       const ator = quem(req, papel, auth);
+       const senhaCerta = typeof b.senha === 'string' && (doUsuario
+-        ? await conferirSenha(b.senha, await store.usuarioObter(auth.usuario.id), plat.iguaisTempoConstante)
++        ? await senhaDoUsuarioConfere(b.senha)
+         : plat.iguaisTempoConstante(await hashChave(b.senha), await hashChave(adminSenha)));
+       if (!senhaCerta) {
+         tent.n++;
