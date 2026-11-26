@@ -8,25 +8,26 @@ use crate::conhecimento;
 use crate::contexto::{contexto, recursos_de};
 use crate::historico::{Ator, diff, evento, registrar};
 use crate::mapa::mapa;
-use crate::usuarios::{
-    NovoUsuario, PAPEIS_USUARIO, conferir_senha, criar_credencial, eh_superadmin, lista_de_ids,
-    normalizar_email, validar_novo_usuario, validar_senha_nova,
-};
+use crate::permissoes::pode_fazer;
 use crate::reservas::{
     Mudancas, PedidoReserva, cancelar_reserva, disponibilidade, editar_reserva, publica,
     reativar_reserva, reservar_detalhado,
+};
+use crate::usuarios::{
+    NovoUsuario, PAPEIS_USUARIO, conferir_senha, criar_credencial, eh_superadmin, lista_de_ids,
+    normalizar_email, validar_novo_usuario, validar_senha_nova,
 };
 use crate::util::{
     Erro, Res, data_ok, decodificar_uri, err, erro, horario_ok, inteiro, js_string, parse_query,
     tam,
 };
-use one_store::{
-    Ambiente, Chave, Empresa, Sessao, Usuario, ExcluirReserva, Json, Modulos, Plataforma, RemoverLayout,
-    RenomearAmbiente, Repositorio, iguais_tempo_constante, iso_ms,
-};
-use serde_json::{Map, json};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use one_store::{
+    Ambiente, Chave, Empresa, ExcluirReserva, Json, Modulos, Plataforma, RemoverLayout,
+    RenomearAmbiente, Repositorio, Sessao, Usuario, iguais_tempo_constante, iso_ms,
+};
+use serde_json::{Map, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
@@ -620,12 +621,20 @@ async fn rotear<R: Repositorio>(
         let (r1, r2) = {
             let mut l = ctx.login.lock().unwrap_or_else(|e| e.into_inner());
             (
-                l.contar(&format!("ip:{}", ip_de(&ctx.cfg, req)), agora, ctx.cfg.limite_login),
+                l.contar(
+                    &format!("ip:{}", ip_de(&ctx.cfg, req)),
+                    agora,
+                    ctx.cfg.limite_login,
+                ),
                 l.contar(&format!("email:{email}"), agora, ctx.cfg.limite_login),
             )
         };
         if let Err(retry) = r1.and(r2) {
-            let mut r = resp(429, json!({ "erro": "muitas tentativas; tente novamente em instantes" }), cors);
+            let mut r = resp(
+                429,
+                json!({ "erro": "muitas tentativas; tente novamente em instantes" }),
+                cors,
+            );
             r.headers.push(("Retry-After".into(), retry.to_string()));
             return Ok(r);
         }
@@ -637,9 +646,12 @@ async fn rotear<R: Repositorio>(
         // Sem usuário, gasta o mesmo tempo de derivação para não revelar se o e-mail existe.
         let ok = match (senha, &u) {
             (Some(s), Some(u)) => conferir_senha(s, &u.salt, u.iteracoes, &u.senha_hash),
-            (Some(s), None) => {
-                conferir_senha(s, &"00".repeat(16), crate::usuarios::ITERACOES_PBKDF2, &"0".repeat(64))
-            }
+            (Some(s), None) => conferir_senha(
+                s,
+                &"00".repeat(16),
+                crate::usuarios::ITERACOES_PBKDF2,
+                &"0".repeat(64),
+            ),
             _ => false,
         };
         let Some(u) = u.filter(|u| ok && u.ativo) else {
@@ -700,11 +712,15 @@ async fn rotear<R: Repositorio>(
 
     let partes: Vec<&str> = caminho.split('/').filter(|s| !s.is_empty()).collect();
     let p = |i: usize| partes.get(i).copied();
-    let staff = papel == "cliente" || papel == "integracao" || PAPEIS_USUARIO.contains(&papel);
+    let pode = |acao: &str| pode_fazer(papel, acao); // quem pode o quê: permissoes.rs
+    let staff = pode("painel.usar");
     // papel legado das regras de edição do agente
-    let base = if eh_superadmin(papel) { "integracao" } else { "cliente" };
+    let base = if eh_superadmin(papel) {
+        "integracao"
+    } else {
+        "cliente"
+    };
     let do_usuario = auth.usuario.is_some();
-    let superadmin = eh_superadmin(papel);
     let consulta = parse_query(&query);
     let q = |k: &str| {
         consulta
@@ -724,7 +740,7 @@ async fn rotear<R: Repositorio>(
 
     // Usuário que não é superadmin só enxerga as empresas liberadas para ele.
     if let Some(u) = &auth.usuario
-        && !superadmin
+        && !pode("empresas.todas")
         && p(0) == Some("empresas")
         && p(1).is_some()
         && !u.empresas.contains(&dec(p(1).unwrap_or(""))?)
@@ -733,13 +749,17 @@ async fn rotear<R: Repositorio>(
     }
     // Configuração sensível: equipe e admin reautenticam com a própria senha (vale 5 min); superadmin e tokens do env dispensam.
     let reautenticado = !do_usuario
-        || superadmin
+        || pode("configuracao.sem-senha")
         || auth
             .reautenticado_em
             .as_deref()
             .is_some_and(|r| r >= iso_ms(agora - REAUTENTICACAO_MS).as_str());
     let exigir_reautenticacao = || {
-        let mut r = resp(403, json!({ "erro": "digite novamente a sua senha para continuar", "reautenticar": true }), cors);
+        let mut r = resp(
+            403,
+            json!({ "erro": "digite novamente a sua senha para continuar", "reautenticar": true }),
+            cors,
+        );
         r.status = 403;
         r
     };
@@ -759,8 +779,12 @@ async fn rotear<R: Repositorio>(
             cors,
             200,
             match &auth.usuario {
-                Some(u) => json!({ "id": u.id, "nome": u.nome, "email": u.email, "papel": papel, "empresas": u.empresas, "reautenticadoEm": auth.reautenticado_em }),
-                None => json!({ "id": null, "nome": null, "email": null, "papel": papel, "empresas": null, "reautenticadoEm": null }),
+                Some(u) => {
+                    json!({ "id": u.id, "nome": u.nome, "email": u.email, "papel": papel, "empresas": u.empresas, "reautenticadoEm": auth.reautenticado_em })
+                }
+                None => {
+                    json!({ "id": null, "nome": null, "email": null, "papel": papel, "empresas": null, "reautenticadoEm": null })
+                }
             },
         );
     }
@@ -768,9 +792,17 @@ async fn rotear<R: Repositorio>(
         let Some(u) = &auth.usuario else {
             return erro(403, "somente usuários com login reautenticam");
         };
-        let lim = ctx.login.lock().unwrap_or_else(|e| e.into_inner()).contar(&format!("email:{}", u.email), agora, ctx.cfg.limite_login);
+        let lim = ctx.login.lock().unwrap_or_else(|e| e.into_inner()).contar(
+            &format!("email:{}", u.email),
+            agora,
+            ctx.cfg.limite_login,
+        );
         if let Err(retry) = lim {
-            let mut r = resp(429, json!({ "erro": "muitas tentativas; tente novamente em instantes" }), cors);
+            let mut r = resp(
+                429,
+                json!({ "erro": "muitas tentativas; tente novamente em instantes" }),
+                cors,
+            );
             r.headers.push(("Retry-After".into(), retry.to_string()));
             return Ok(r);
         }
@@ -792,9 +824,17 @@ async fn rotear<R: Repositorio>(
         let Some(u) = &auth.usuario else {
             return erro(403, "somente usuários com login trocam a senha");
         };
-        let lim = ctx.login.lock().unwrap_or_else(|e| e.into_inner()).contar(&format!("email:{}", u.email), agora, ctx.cfg.limite_login);
+        let lim = ctx.login.lock().unwrap_or_else(|e| e.into_inner()).contar(
+            &format!("email:{}", u.email),
+            agora,
+            ctx.cfg.limite_login,
+        );
         if let Err(retry) = lim {
-            let mut r = resp(429, json!({ "erro": "muitas tentativas; tente novamente em instantes" }), cors);
+            let mut r = resp(
+                429,
+                json!({ "erro": "muitas tentativas; tente novamente em instantes" }),
+                cors,
+            );
             r.headers.push(("Retry-After".into(), retry.to_string()));
             return Ok(r);
         }
@@ -811,25 +851,41 @@ async fn rotear<R: Repositorio>(
             return erro(403, "senha atual incorreta");
         }
         let nova = b.get("nova").and_then(Json::as_str).unwrap_or("");
-        repo.usuario_senha_definir(&u.id, criar_credencial(nova, ctx.plat.aleatorio(16))).await;
-        repo.sessoes_remover_do_usuario(&u.id, auth.sessao_hash.as_deref()).await;
+        repo.usuario_senha_definir(&u.id, criar_credencial(nova, ctx.plat.aleatorio(16)))
+            .await;
+        repo.sessoes_remover_do_usuario(&u.id, auth.sessao_hash.as_deref())
+            .await;
         return passa(cors, 200, json!({ "ok": true }));
     }
     // ---------- gestão de usuários (só superadmin) ----------
     if p(0) == Some("usuarios") {
-        if !superadmin {
+        if !pode("usuarios.gerir") {
             return erro(403, "sem permissão");
         }
         let ids_empresas = || async {
-            repo.empresa_listar().await.into_iter().map(|e| e.id).collect::<Vec<_>>()
+            repo.empresa_listar()
+                .await
+                .into_iter()
+                .map(|e| e.id)
+                .collect::<Vec<_>>()
         };
         if partes.len() == 1 && m == "GET" {
-            let lista: Vec<Json> = repo.usuario_listar().await.iter().map(usuario_publico).collect();
+            let lista: Vec<Json> = repo
+                .usuario_listar()
+                .await
+                .iter()
+                .map(usuario_publico)
+                .collect();
             return passa(cors, 200, Json::Array(lista));
         }
         if partes.len() == 1 && m == "POST" {
             let corpo = ler_corpo(req, LIMITE_CORPO).await?;
-            let NovoUsuario { nome, email, papel: papel_novo, empresas } = validar_novo_usuario(&corpo).map_err(|e| err(400, e))?;
+            let NovoUsuario {
+                nome,
+                email,
+                papel: papel_novo,
+                empresas,
+            } = validar_novo_usuario(&corpo).map_err(|e| err(400, e))?;
             let existentes = ids_empresas().await;
             if let Some(d) = empresas.iter().find(|e| !existentes.contains(e)) {
                 return erro(400, format!("empresa inexistente: {d}"));
@@ -898,14 +954,21 @@ async fn rotear<R: Repositorio>(
                 // Nunca ficar sem superadmin ativo.
                 let deixa_de_ser = alvo.papel == "superadmin"
                     && alvo.ativo
-                    && (papel_m.as_deref().is_some_and(|x| x != "superadmin") || ativo == Some(false));
+                    && (papel_m.as_deref().is_some_and(|x| x != "superadmin")
+                        || ativo == Some(false));
                 if deixa_de_ser
-                    && repo.usuario_superadmins_ativos().await.iter().all(|i| *i == alvo.id)
+                    && repo
+                        .usuario_superadmins_ativos()
+                        .await
+                        .iter()
+                        .all(|i| *i == alvo.id)
                 {
                     return erro(409, "precisa existir pelo menos um superadmin ativo");
                 }
                 let mudou_papel = papel_m.as_deref().is_some_and(|x| x != alvo.papel);
-                let r = repo.usuario_atualizar(&uid, nome, papel_m, ativo, empresas).await;
+                let r = repo
+                    .usuario_atualizar(&uid, nome, papel_m, ativo, empresas)
+                    .await;
                 if ativo == Some(false) || mudou_papel {
                     repo.sessoes_remover_do_usuario(&uid, None).await;
                 }
@@ -920,7 +983,8 @@ async fn rotear<R: Repositorio>(
                     return erro(400, e);
                 }
                 let senha = b.get("senha").and_then(Json::as_str).unwrap_or("");
-                repo.usuario_senha_definir(&uid, criar_credencial(senha, ctx.plat.aleatorio(16))).await;
+                repo.usuario_senha_definir(&uid, criar_credencial(senha, ctx.plat.aleatorio(16)))
+                    .await;
                 repo.sessoes_remover_do_usuario(&uid, None).await;
                 return passa(cors, 200, json!({ "ok": true }));
             }
@@ -929,7 +993,7 @@ async fn rotear<R: Repositorio>(
 
     // GET /historico/excluidas: resumo das empresas excluídas (o instantâneo completo fica gravado no histórico)
     if p(0) == Some("historico") && p(1) == Some("excluidas") && partes.len() == 2 && m == "GET" {
-        so_staff(staff && (!do_usuario || superadmin))?;
+        so_staff(pode("historico.excluidas"))?;
         let lista: Vec<Json> = repo
             .historico_excluidas()
             .await
@@ -947,7 +1011,7 @@ async fn rotear<R: Repositorio>(
     }
     // POST /empresas { nome }  (nasce com agente vazio, sem ambientes e sem chave de API)
     if p(0) == Some("empresas") && partes.len() == 1 && m == "POST" {
-        so_staff(staff && (!do_usuario || superadmin))?;
+        so_staff(pode("empresa.criar"))?;
         let b = ler_corpo(req, LIMITE_CORPO).await?;
         let nome = validar_nome(repo, b.get("nome"), None).await?;
         let (mr, mc) = validar_modulos(b.get("modulos")).map_err(|e| err(400, e))?;
@@ -1004,7 +1068,7 @@ async fn rotear<R: Repositorio>(
         && p(2) == Some("api")
         && (partes.len() == 3 || (partes.len() == 4 && p(3) == Some("chave")))
     {
-        if !superadmin {
+        if !pode("api.gerir") {
             return erro(
                 403,
                 "somente a equipe de integração gerencia a chave de API",
@@ -1073,7 +1137,7 @@ async fn rotear<R: Repositorio>(
             .filter(|l| {
                 auth.usuario
                     .as_ref()
-                    .is_none_or(|u| superadmin || u.empresas.contains(&l.id))
+                    .is_none_or(|u| pode("empresas.todas") || u.empresas.contains(&l.id))
             })
             .map(|l| json!({ "id": l.id, "nome": l.nome, "modulos": modulos_json(l.modulos) }))
             .collect();
@@ -1340,7 +1404,7 @@ async fn rotear<R: Repositorio>(
         && p(4) == Some("desfazer")
         && m == "POST"
     {
-        so_staff(staff && papel != "equipe")?;
+        so_staff(pode("historico.desfazer"))?;
         let Some(seq) = numero_inteiro(p(3).unwrap_or("")) else {
             return erro(404, "evento inexistente");
         };
@@ -1631,7 +1695,7 @@ async fn rotear<R: Repositorio>(
         return passa(cors, 200, Json::Array(lista));
     }
     if recurso == "historico" && m == "GET" {
-        so_staff(staff && papel != "equipe")?;
+        so_staff(pode("historico.ver"))?;
         empresa(repo, &empresa_id).await?;
         return passa(
             cors,
@@ -1645,7 +1709,7 @@ async fn rotear<R: Repositorio>(
     // POST /empresas/:id/excluir { senha, confirmarNome }: exige a senha do administrador. Irreversível; grava instantâneo no histórico.
     if recurso == "excluir" && m == "POST" {
         so_staff(staff)?;
-        if papel == "equipe" {
+        if !pode("empresa.excluir") {
             return erro(403, "somente admin ou superadmin exclui empresa");
         }
         let l = empresa(repo, &empresa_id).await?;
@@ -1696,7 +1760,11 @@ async fn rotear<R: Repositorio>(
             registrar(repo, evento(ev)).await;
             return erro(
                 403,
-                if do_usuario { "senha incorreta" } else { "senha do administrador incorreta" },
+                if do_usuario {
+                    "senha incorreta"
+                } else {
+                    "senha do administrador incorreta"
+                },
             );
         }
         repo.tentativas_admin_gravar(0, ate).await;

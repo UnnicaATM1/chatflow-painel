@@ -30,8 +30,14 @@ const ESTATICOS: [(&str, &str); 9] = [
     ("bundle.css", "text/css; charset=utf-8"),
     ("tokens.css", "text/css; charset=utf-8"),
     ("logo-chatflow.png", "image/png"),
-    ("vendor/react.production.min.js", "text/javascript; charset=utf-8"),
-    ("vendor/react-dom.production.min.js", "text/javascript; charset=utf-8"),
+    (
+        "vendor/react.production.min.js",
+        "text/javascript; charset=utf-8",
+    ),
+    (
+        "vendor/react-dom.production.min.js",
+        "text/javascript; charset=utf-8",
+    ),
 ];
 
 /// Relógio e aleatoriedade do sistema.

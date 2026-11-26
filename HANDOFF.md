@@ -9,10 +9,10 @@ telas-referencia: 100%
 frontend: 80%
 backend: 96%
 planejamento-tela-01: 100%
-api-rust: 96%
+api-rust: 97%
 worker-sites: 95%
-usuarios-camadas: 90%
-geral: 78%
+usuarios-camadas: 92%
+geral: 80%
 <!-- STATUS_END -->
 
 Regras deste bloco, sempre seguir:
@@ -27,12 +27,11 @@ Regras deste bloco, sempre seguir:
 
 ## 📍 Onde paramos
 
-Feature 002 (usuários com senha própria por camada) está em `main` (commit 2f6cd4f). Depois dela, o menu "Alimentos e Bebidas" do painel virou "Estrutura de Negócio" e o Reversa Refactor aplicou 4 melhorias no `src/nucleo.js` (registro em `_reversa_refactor/nucleo-api/`): padronização, helpers de limite de login e de senha, `semPermissao()` e `idDe()`, e extração das rotas de sessão e de usuários para `src/rotas-sessao.js` e `src/rotas-usuarios.js`. Além disso nasceu a camada de permissões `src/permissoes.js`: uma tabela `PERMISSOES` (ação para lista de camadas) e `podeFazer(papel, ação)`; para liberar ou bloquear algo para uma camada basta editar a lista da ação ali. A matriz fica guardada em `tests/permissoes.test.js`. Verificação: `CHATFLOW_TESTE_OPERACAO=1 npm test` (196), `npm run test:worker` (41), `npm run test:worker:d1` (42) e `node tests/diferencial-usuarios.js` (65 chamadas JS x Rust, 0 diferenças) verdes.
+Feature 002 (usuários com senha própria por camada) está em `main` (commit 2f6cd4f). Depois dela, o menu "Alimentos e Bebidas" do painel virou "Estrutura de Negócio" e o Reversa Refactor aplicou 4 melhorias no `src/nucleo.js` (registro em `_reversa_refactor/nucleo-api/`): padronização, helpers de limite de login e de senha, `semPermissao()` e `idDe()`, e extração das rotas de sessão e de usuários para `src/rotas-sessao.js` e `src/rotas-usuarios.js`. Além disso nasceu a camada de permissões `src/permissoes.js` (e `rust/one-core/src/permissoes.rs`, espelhada, com a mesma matriz em teste): uma tabela `PERMISSOES` (ação para lista de camadas) e `podeFazer(papel, ação)`; para liberar ou bloquear algo para uma camada basta editar a lista da ação ali. A matriz fica guardada em `tests/permissoes.test.js`. Verificação: `CHATFLOW_TESTE_OPERACAO=1 npm test` (196), `npm run test:worker` (41), `npm run test:worker:d1` (42) e `node tests/diferencial-usuarios.js` (65 chamadas JS x Rust, 0 diferenças) verdes; a régua `tests/api.test.js` contra o binário Rust também passa (40 testes, 0 falhas).
 Site `https://chatflow-painel.joaolopes.chatgpt.site`: precisa republicar com o commit mais novo para ter usuários, a aba Usuários e o menu novo (a migração `0003_usuarios` vai no artefato). Os três usuários de teste (equipe, admin, superadmin) já entraram; o admin só entrou depois de redefinir a senha. NicoChat: `one_url` já aponta para o site e os 4 fluxos ONE estão publicados; `#one` segue inativa até `one_chave` (chave `k1_…` da PARK FOZ, gerada na aba API por superadmin) e `one_empresa` estarem certos.
 
 ## ✅ Pendências ativas
 
-- [ ] Camada de permissões em Rust: espelhar a tabela de `src/permissoes.js` em `rust/one-core` (hoje o Rust repete as regras à mão; o diferencial garante a paridade, mas uma regra nova precisa ser escrita nos dois lados). Opportunity OPP-20261125-t8zr em `_reversa_refactor/nucleo-api/`.
 - [ ] Refactor restante do `src/nucleo.js` (rotas de empresa, agente, reservas e conhecimento ainda dentro de `tratar()`): rodar `/reversa-refactor` de novo no contexto `nucleo-api`.
 - [ ] TASK-004: validar login com João no domínio e testar criação, reabertura e limpeza de uma empresa e reserva de homologação.
 - [ ] Bloqueante antes de clientes reais ou do NicoChat: rotacionar `CHATFLOW_TOKEN_CLIENTE`, `CHATFLOW_TOKEN_INTEGRACAO` e `CHATFLOW_ADMIN_SENHA` para valores fortes e distintos. Com a mesma senha, a credencial da equipe também pode confirmar a exclusão de empresas.
@@ -58,7 +57,6 @@ Site `https://chatflow-painel.joaolopes.chatgpt.site`: precisa republicar com o 
 - [ ] LGPD: a reserva agora guarda nome e contato do cliente (e o histórico copia esses dados): definir prazo de retenção, base legal e como apagar a pedido do titular antes de usar com clientes reais
 - [ ] Busca no conhecimento é por palavras (sem IA): se o catálogo crescer ou as perguntas fugirem das palavras cadastradas, avaliar busca semântica
 - [ ] Base de conhecimento: separar os arquivos no R2 para o D1 e extrair texto de PDF, Word e Excel
-- [ ] Trocar os `window.confirm` da aba API (gerar nova chave, revogar) por confirmação na própria tela, como já é feito ao excluir item e empresa
 
 - [ ] NicoChat (montado pelo MCP, workspace Unnica Flow 119255, canal ChatFlow `f124625`, pasta ONE `f124625fd5394059`). DESENHO FINAL: toda conversa começa no fluxo `ONE - Conversa (#one)` (`f124625s5116871`): GET `/empresas/{{one_empresa}}/contexto` com Bearer `{{one_chave}}`, resposta inteira (`$`) em `one_ctx` (Long JSON), depois bloco Agente de IA **Nico ONE** (`f124625ag168951`, gpt-5.4-mini). Os campos do agente leem `{{one_ctx :: $.agente.personalidade}}` etc. (testado: o NicoChat renderiza `{{var :: $.caminho}}` de Long JSON). 3 functions de IA (`f124625af261165` search_company_knowledge, `...167` check_table_availability, `...169` book_table) apontam para 3 workflows (`f124625s5116857` buscar, `...859` disponibilidade, `...861` reservar) que chamam a API e terminam em `ai_function_result`. Variáveis do canal: `one_url` (hoje marcador `https://ENDERECO-PUBLICO-DO-ONE`), `one_empresa` (`empresa_1`), `one_chave` (marcador). Variáveis de contato: one_ctx, one_busca, one_disp, one_reserva, one_consulta, one_data, one_horario, one_pessoas, one_mesa, one_ambiente. Palavra-chave `#one` (contains, `f124625s5116871`) criada INATIVA. Nada publicado: tudo em rascunho. FALTA, nesta ordem: (1) ONE com endereço público; (2) gerar a chave da empresa na aba API do ONE; (3) trocar os valores de `one_url` e `one_chave` (variáveis do canal); (4) publicar os 4 fluxos (`channel_sub_flow_publish`); (5) ativar a palavra-chave `#one`; (6) testar. Os 4 "Fluxos de Função" antigos (one_contexto, one_buscar_conhecimento, one_disponibilidade, one_reservar) e `ONE TESTE - leitura de variaveis (temporario)` na pasta ONE estão SUPERADOS e podem ser apagados na tela (o MCP não apaga fluxo). Avisos: o `sandbox_message_send` passa a mensagem de aquecimento pelo fluxo de entrada do canal (UCF - Entrada Atendimento): o teste de 15/11 acionou o agente real do João com um contato de teste (já apagado) e chamou a function save_qualification; para testar de novo, preferir `start_at` em fluxo isolado e checar o `path[]`
 - [ ] Publicar o ONE em endereço público (servidor ou túnel): o NicoChat roda na nuvem e não alcança `127.0.0.1`. Depois, testar de verdade o gatilho `#one` ponta a ponta
@@ -75,7 +73,7 @@ Site `https://chatflow-painel.joaolopes.chatgpt.site`: precisa republicar com o 
 
 ## 🧠 Aprendizados importantes
 
-- Permissões: toda decisão de camada vive em `src/permissoes.js` (`podeFazer(papel, 'ação')`); não escreva `papel === 'equipe'` nem listas de papéis no núcleo. Módulos novos de rotas ficam em `src/` (não em subpasta) para o teste "núcleo sem Node" varrer o arquivo.
+- Permissões: toda decisão de camada vive em `src/permissoes.js` e `rust/one-core/src/permissoes.rs` (mudou um, mude o outro e rode o diferencial) (`podeFazer(papel, 'ação')`); não escreva `papel === 'equipe'` nem listas de papéis no núcleo. Módulos novos de rotas ficam em `src/` (não em subpasta) para o teste "núcleo sem Node" varrer o arquivo.
 
 - Usuários: token de sessão `s1_…` (só o hash fica guardado), PBKDF2-SHA256 100000 iterações por `crypto.subtle` em `src/usuarios.js` (o teto do Workers); equipe e admin reautenticam por 5 min para PATCH de empresa e módulos; excluir empresa usa a senha do próprio usuário. Em Python no Windows, gravar arquivo com `open(..., 'w')` troca LF por CRLF e quebra o teste "núcleo sem Node": use `newline=''`.
 

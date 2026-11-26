@@ -64,7 +64,11 @@ pub fn hex(bytes: &[u8]) -> String {
 }
 
 fn de_hex(t: &str) -> Option<Vec<u8>> {
-    if !t.len().is_multiple_of(2) || !t.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+    if !t.len().is_multiple_of(2)
+        || !t
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
         return None;
     }
     (0..t.len())
@@ -209,7 +213,10 @@ mod testes {
     fn pbkdf2_vetor_conhecido() {
         // RFC 7914 §11: PBKDF2-HMAC-SHA-256("passwd", "salt", 1, 64) começa com 55ac046e56e3089f...
         let dk = pbkdf2_sha256(b"passwd", b"salt", 1);
-        assert_eq!(hex(&dk), "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc");
+        assert_eq!(
+            hex(&dk),
+            "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc"
+        );
     }
 
     #[test]

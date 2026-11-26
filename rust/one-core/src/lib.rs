@@ -10,6 +10,7 @@ pub mod contexto;
 pub mod historico;
 pub mod mapa;
 pub mod nucleo;
+pub mod permissoes;
 pub mod reservas;
 pub mod tempo;
 pub mod usuarios;

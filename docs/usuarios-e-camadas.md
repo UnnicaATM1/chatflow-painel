@@ -16,7 +16,7 @@ Tudo é imposto no servidor (`src/nucleo.js` e `rust/one-core/src/nucleo.rs`), n
 
 No JS, todas as decisões de camada estão em **`src/permissoes.js`**: uma tabela `PERMISSOES` com cada ação (`historico.ver`, `api.gerir`, `usuarios.gerir`, `empresa.excluir` e outras) e a lista das camadas que podem fazê-la. Para liberar ou bloquear algo, edite a lista da ação ali. O núcleo só pergunta `podeFazer(papel, 'ação')`. A matriz esperada fica em `tests/permissoes.test.js`: se você mudar a tabela de propósito, atualize a matriz no mesmo commit e rode `npm test`.
 
-O Rust (`rust/one-core`) ainda repete essas regras à mão; ao mudar uma permissão, mude também lá e rode `node tests/diferencial-usuarios.js`.
+O Rust tem a mesma tabela em `rust/one-core/src/permissoes.rs`; ao mudar uma permissão, mude os dois e rode `node tests/diferencial-usuarios.js` e `cargo test -p one-core`.
 
 ## Acesso de emergência e integrações (não mudaram)
 

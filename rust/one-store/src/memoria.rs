@@ -1,6 +1,8 @@
 //! Repositório em memória (espelha `src/repositorio.js`).
 
-use crate::modelo::{Ambiente, Chave, Credencial, Empresa, Mesa, Modulos, Reserva, Sessao, Usuario};
+use crate::modelo::{
+    Ambiente, Chave, Credencial, Empresa, Mesa, Modulos, Reserva, Sessao, Usuario,
+};
 use crate::plataforma::{Plataforma, codigo_curto, codigo_seguinte, iso_ms, uuid};
 use crate::{
     CriarItem, CriarReserva, ExcluirReserva, Json, Muda, RemoverLayout, RenomearAmbiente,
@@ -905,7 +907,11 @@ impl Repositorio for Memoria {
     }
 
     async fn usuario_por_email(&self, email: &str) -> Option<Usuario> {
-        self.est().usuarios.iter().find(|u| u.email == email).cloned()
+        self.est()
+            .usuarios
+            .iter()
+            .find(|u| u.email == email)
+            .cloned()
     }
 
     async fn usuario_obter(&self, id: &str) -> Option<Usuario> {
