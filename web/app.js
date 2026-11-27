@@ -4,7 +4,26 @@
   // Endereço da API vindo de config.js (sem barra no fim). Vazio = mesma origem do painel.
   var BASE = String((window.CHATFLOW_CONFIG && window.CHATFLOW_CONFIG.apiBase) || '').replace(/\/$/, '');
   var R = window.React, h = R.createElement, K = window.ChatFlow;
-  var useState = R.useState, useEffect = R.useEffect, useCallback = R.useCallback;
+  var useState = R.useState, useEffect = R.useEffect, useCallback = R.useCallback, useRef = R.useRef;
+
+  // Fila de gravações: opções marcam na hora do clique e são salvas em segundo plano, uma de cada vez e na ordem
+  // dos cliques (para um envio mais lento não sobrescrever o mais novo). `ultimo` indica que não resta envio pendente.
+  function useFila() {
+    var ref = useRef(null);
+    if (!ref.current) {
+      var fim = Promise.resolve(), n = 0;
+      ref.current = {
+        pendentes: function () { return n; },
+        enviar: function (tarefa) {
+          n++;
+          var atual = fim.then(tarefa);
+          fim = atual.then(function () {}, function () {});
+          return atual.then(function () { n--; return { ultimo: n === 0 }; }, function (e) { n--; e.ultimo = n === 0; throw e; });
+        },
+      };
+    }
+    return ref.current;
+  }
 
   function hoje() {
     var d = new Date();
@@ -264,6 +283,16 @@
     var m = p.mesa;
     var sc = useState(String(m.capacidade)), cap = sc[0], setCap = sc[1];
     var sd = useState(m.descricao || ''), desc = sd[0], setDesc = sd[1];
+    var sl = useState(m.reservavel), reservavel = sl[0], setReservavel = sl[1];
+    var fila = useFila();
+    useEffect(function () { if (!fila.pendentes()) setReservavel(m.reservavel); }, [m.reservavel]);
+    function alternarReservavel() {
+      var novo = !reservavel;
+      setReservavel(novo); setMsg('Salvando…');
+      fila.enviar(function () { return api(p.token, 'PATCH', '/empresas/' + encodeURIComponent(p.empresa) + '/mesas/' + encodeURIComponent(m.id), { reservavel: novo }); })
+        .then(function (r) { if (r.ultimo) { setMsg('Salvo.'); p.recarregar(); } })
+        .catch(function (e) { setReservavel(!novo); setMsg(e.message); p.recarregar(); });
+    }
     var se = useState(''), msg = se[0], setMsg = se[1];
     var sr = useState(false), confRemover = sr[0], setConfRemover = sr[1];
     var conflito = msg.indexOf('Não dá para remover') === 0;
@@ -281,7 +310,7 @@
         h('b', { className: 'mono', style: { minWidth: 90 } }, m.id),
         h('label', { className: 'k1-row' }, 'Lugares', h('input', { type: 'number', min: 1, max: 100, value: cap, style: { width: 72 }, onChange: function (e) { setCap(e.target.value); } })),
         h(K.Button, { variant: 'secondary', onClick: function () { salvar({ capacidade: Number(cap), descricao: desc }); } }, 'Salvar'),
-        h(K.Button, { variant: m.reservavel ? 'neutral' : 'primary', onClick: function () { salvar({ reservavel: !m.reservavel }); } }, m.reservavel ? 'Bloquear reservas' : 'Liberar reservas'),
+        h(K.Button, { variant: reservavel ? 'neutral' : 'primary', onClick: alternarReservavel }, reservavel ? 'Bloquear reservas' : 'Liberar reservas'),
         !confRemover && h(K.Button, { variant: 'danger', 'aria-label': 'Remover a mesa ' + m.id, onClick: function () { setMsg(''); setConfRemover(true); } }, 'Remover mesa'),
         !conflito && h('span', { className: 'rotulo' }, msg)),
       h(CampoDescricaoMesa, { valor: desc, rotulo: 'Descrição do local da mesa ' + m.id, aoMudar: function (v) { setDesc(v); setMsg(''); }, aoConfirmar: function () { salvar({ descricao: desc }); } }),
@@ -401,16 +430,26 @@
           h(K.Button, { variant: 'ghost', onClick: fechar }, 'Cancelar'))));
   }
 
+  var SEM_MODULOS = {};
+
   function RecursosEmpresa(p) {
     var sm = useState(''), msg = sm[0], setMsg = sm[1];
+    var so = useState({}), marcado = so[0], setMarcado = so[1];
+    var fila = useFila();
+    useEffect(function () { if (!fila.pendentes()) setMarcado({}); }, [p.modulos]);
     function mudar(chave, valor) {
       var corpo = {}; corpo[chave] = valor;
-      api(p.token, 'PATCH', '/empresas/' + encodeURIComponent(p.empresa) + '/modulos', corpo)
-        .then(function () { setMsg('Salvo.'); p.aoMudar(); }).catch(function (e) { setMsg(e.message); });
+      setMarcado(function (a) { return Object.assign({}, a, corpo); }); setMsg('Salvando…');
+      fila.enviar(function () { return api(p.token, 'PATCH', '/empresas/' + encodeURIComponent(p.empresa) + '/modulos', corpo); })
+        .then(function (r) { if (r.ultimo) { setMsg(function (t) { return t === 'Salvando…' ? 'Salvo.' : t; }); p.aoMudar(); } })
+        .catch(function (e) {
+          setMarcado(function (a) { var n = Object.assign({}, a); delete n[chave]; return n; });
+          setMsg(e.message); p.aoMudar();
+        });
     }
     function opcao(chave, titulo, desc) {
       return h('label', { key: chave, className: 'k1-row', style: { alignItems: 'flex-start', gap: 10, flexWrap: 'nowrap' } },
-        h('input', { type: 'checkbox', checked: p.modulos[chave] !== false, style: { marginTop: 4 }, onChange: function (e) { mudar(chave, e.target.checked); } }),
+        h('input', { type: 'checkbox', checked: chave in marcado ? marcado[chave] : p.modulos[chave] !== false, style: { marginTop: 4 }, onChange: function (e) { mudar(chave, e.target.checked); } }),
         h('span', null, h('b', null, titulo), h('br'), h('span', { style: { color: 'var(--ink-muted)', fontSize: 13 } }, desc)));
     }
     return h('div', { className: 'k1-stack', style: { borderBottom: '1px solid var(--border)', paddingBottom: 16 } },
@@ -418,7 +457,7 @@
       opcao('reservas', 'Reservas e mapa de mesas', 'Para negócios com mesas. Desligado, somem as abas Reservas e Mapa de mesas e a API deixa de oferecer disponibilidade e reservas.'),
       opcao('conhecimento', 'Base de conhecimento', 'Tabelas de preços, textos e documentos que o sistema de conversa lê pela API.'),
       h('div', { style: { color: 'var(--ink-muted)', fontSize: 12 } }, 'Desligar um recurso não apaga nada: os dados ficam guardados e voltam quando ele for ligado de novo.'),
-      msg && h('div', { className: msg === 'Salvo.' ? 'rotulo' : 'erro', role: 'status' }, msg));
+      msg && h('div', { className: msg === 'Salvo.' || msg === 'Salvando…' ? 'rotulo' : 'erro', role: 'status' }, msg));
   }
 
   function Configuracao(p) {
@@ -432,12 +471,12 @@
     return h('section', { className: 'painel k1-stack' },
       h('h2', null, 'Configuração · ' + (est && !reservasOn ? 'Empresa' : 'Empresa → Ambiente → Mesa')),
       est && h(NomeEmpresa, { key: est.nome, nome: est.nome, token: p.token, empresa: p.empresa, aoRenomear: p.aoRenomear }),
-      est && h(RecursosEmpresa, { modulos: est.modulos || {}, token: p.token, empresa: p.empresa, aoMudar: function () { carregar(); p.aoRenomear(); } }),
+      est && h(RecursosEmpresa, { modulos: est.modulos || SEM_MODULOS, token: p.token, empresa: p.empresa, aoMudar: function () { carregar(); p.aoRenomear(); } }),
       erro && h('div', { className: 'erro', role: 'alert' }, erro),
       reservasOn && est.ambientes.length === 0 && h(K.EmptyState, null, 'Nenhum ambiente cadastrado. Crie o primeiro abaixo para poder cadastrar mesas e receber reservas.'),
       reservasOn && est.ambientes.map(function (a) {
         return h('div', { key: a.nome }, h(CabecalhoAmbiente, { ambiente: a, token: p.token, empresa: p.empresa, recarregar: carregar }),
-          a.mesas.map(function (m) { return h(LinhaMesa, { key: m.id + '|' + m.capacidade + '|' + m.reservavel + '|' + (m.descricao || ''), mesa: m, token: p.token, empresa: p.empresa, recarregar: carregar }); }),
+          a.mesas.map(function (m) { return h(LinhaMesa, { key: m.id + '|' + m.capacidade + '|' + (m.descricao || ''), mesa: m, token: p.token, empresa: p.empresa, recarregar: carregar }); }),
           h(NovaMesa, { key: 'nova-' + a.nome + a.mesas.length, ambiente: a.nome, token: p.token, empresa: p.empresa, recarregar: carregar }));
       }),
       reservasOn && h(NovoAmbiente, { token: p.token, empresa: p.empresa, recarregar: carregar }),
@@ -981,7 +1020,13 @@
     var sf = useState({ nome: '', email: '', papel: 'equipe', senha: '', empresas: [] }), f = sf[0], setF = sf[1];
     var sr = useState(0), recarga = sr[0], setRecarga = sr[1];
     var ss = useState(null), redef = ss[0], setRedef = ss[1]; // { id, senha }
-    useEffect(function () { api(p.token, 'GET', '/usuarios').then(setLista).catch(function (e) { setMsg(e.message); }); }, [p.token, recarga]);
+    var fila = useFila();
+    var sg = useState(false), salvando = sg[0], setSalvando = sg[1];
+    useEffect(function () {
+      var vivo = true;
+      api(p.token, 'GET', '/usuarios').then(function (l) { if (vivo && !fila.pendentes()) setLista(l); }).catch(function (e) { setMsg(e.message); });
+      return function () { vivo = false; };
+    }, [p.token, recarga]);
     function mudar(campo, valor) { var n = Object.assign({}, f); n[campo] = valor; setF(n); }
     function alternarEmpresa(id) { mudar('empresas', f.empresas.indexOf(id) >= 0 ? f.empresas.filter(function (x) { return x !== id; }) : f.empresas.concat(id)); }
     function criar(ev) {
@@ -989,9 +1034,13 @@
       api(p.token, 'POST', '/usuarios', f).then(function () { setF({ nome: '', email: '', papel: 'equipe', senha: '', empresas: [] }); setMsg('Usuário criado.'); setRecarga(recarga + 1); })
         .catch(function (e) { setMsg(e.message); });
     }
+    function recarregar() { setRecarga(function (n) { return n + 1; }); }
     function atualizar(id, mudanca) {
-      setMsg('');
-      api(p.token, 'PATCH', '/usuarios/' + encodeURIComponent(id), mudanca).then(function () { setRecarga(recarga + 1); }).catch(function (e) { setMsg(e.message); });
+      setMsg(''); setSalvando(true);
+      setLista(function (l) { return l.map(function (u) { return u.id === id ? Object.assign({}, u, mudanca) : u; }); });
+      fila.enviar(function () { return api(p.token, 'PATCH', '/usuarios/' + encodeURIComponent(id), mudanca); })
+        .then(function (r) { if (r.ultimo) { setSalvando(false); recarregar(); } })
+        .catch(function (e) { setMsg(e.message); if (e.ultimo) setSalvando(false); recarregar(); });
     }
     function alternarEmpresaDe(u, id) {
       var atual = u.empresas || [];
@@ -1008,6 +1057,7 @@
       h('h2', null, 'Usuários'),
       h('div', { className: 'rotulo' }, 'Cada pessoa entra com o próprio e-mail e senha. O histórico registra quem fez cada alteração.'),
       msg && h('div', { role: 'status', className: /criado|redefinida/.test(msg) ? 'rotulo' : 'erro' }, msg),
+      salvando && h('div', { role: 'status', className: 'rotulo' }, 'Salvando…'),
       h('form', { className: 'k1-stack', onSubmit: criar },
         h('div', { className: 'k1-row' },
           h('input', { type: 'text', placeholder: 'Nome', value: f.nome, maxLength: 80, 'aria-label': 'Nome', onChange: function (e) { mudar('nome', e.target.value); } }),
