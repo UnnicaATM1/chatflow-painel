@@ -69,7 +69,17 @@ pub async fn disponibilidade<R: Repositorio>(
         .map(|a| {
             let mut mesas: Vec<&Livre> = livres.iter().filter(|x| x.ambiente == a.nome).collect();
             mesas.sort_by_key(|x| x.mesa.capacidade);
-            json!({ "ambiente": a.nome, "mesas": mesas.iter().map(|x| json!({ "id": x.mesa.id, "capacidade": x.mesa.capacidade })).collect::<Vec<_>>() })
+            let mesas: Vec<Json> = mesas
+                .iter()
+                .map(|x| {
+                    let mut v = json!({ "id": x.mesa.id, "capacidade": x.mesa.capacidade });
+                    if !x.mesa.descricao.is_empty() {
+                        v["descricao"] = x.mesa.descricao.clone().into();
+                    }
+                    v
+                })
+                .collect();
+            json!({ "ambiente": a.nome, "mesas": mesas })
         })
         .collect();
     Ok(json!({ "ambientes": ambientes }))

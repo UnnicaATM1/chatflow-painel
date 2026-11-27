@@ -139,9 +139,28 @@ test('SQLite: a migração 0002 preserva os dados e permite mesa_id nulo', async
   assert.equal(r.pessoas, 2);
   const verifica = new DatabaseSync(caminho);
   abertos.push(verifica);
-  assert.equal(verifica.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(verifica.prepare('PRAGMA user_version').get().user_version, 4);
   assert.equal(verifica.prepare('SELECT COUNT(*) AS n FROM reservas_codigos').get().n, 1);
   verifica.exec("UPDATE reservas SET mesa_id = NULL WHERE codigo = '22222222'"); verifica.exec("DELETE FROM reservas WHERE codigo = '22222222'");
   assert.throws(() => verifica.exec(`INSERT INTO reservas (id, empresa_id, codigo, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status)
     VALUES ('u2','empresa_1','22222222',NULL,'x','d','h',1,1,2,'cancelada')`), /UNIQUE|codigo de reserva ja emitido/);
 });
+
+for (const modo of ['memoria', 'sqlite', 'd1']) {
+  test(`${modo}: a descrição da mesa é gravada, preservada, apagada e vem da semente`, async (t) => {
+    const { store } = await criar(modo, t);
+    const mesa = async (id) => (await store.empresaObter(E)).ambientes.flatMap((a) => a.mesas).find((m) => m.id === id);
+    await store.mesaEditar(E, 'S1', { descricao: 'Perto da porta' });
+    assert.equal((await mesa('S1')).descricao, 'Perto da porta');
+    await store.mesaEditar(E, 'S1', { capacidade: 8 });
+    assert.equal((await mesa('S1')).descricao, 'Perto da porta');
+    await store.mesaEditar(E, 'S1', { descricao: '' });
+    assert.ok(!('descricao' in (await mesa('S1'))));
+    const nova = await store.mesaCriar(E, 'Salão', { capacidade: 2, descricao: 'Área verde' });
+    assert.equal((await mesa(nova.id)).descricao, 'Área verde');
+    const semente = base();
+    semente.ambientes[0].mesas[0].descricao = 'Parede do bar';
+    await store.empresaCriar({ ...semente, id: 'empresa_2', nome: 'Outro', reservas: [] });
+    assert.equal((await store.empresaObter('empresa_2')).ambientes[0].mesas[0].descricao, 'Parede do bar');
+  });
+}

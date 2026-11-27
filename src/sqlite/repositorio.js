@@ -163,7 +163,7 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
       if (arquivoChave) transacaoAtual.arquivosDescartar.push(arquivoChave);
     }
   }
-  const lerMesa = ({ mesa_id, capacidade, reservavel }) => ({ id: mesa_id, capacidade, reservavel: Boolean(reservavel) });
+  const lerMesa = ({ mesa_id, capacidade, reservavel, descricao }) => ({ id: mesa_id, capacidade, reservavel: Boolean(reservavel), ...(descricao ? { descricao } : {}) });
   function lerEmpresa(linha, incluirConhecimento) {
     if (!linha) return null;
     const { id, nome, agente, chave, modulos, prox_conhecimento } = linha;
@@ -182,8 +182,8 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
   }
 
   function inserirMesa(empresaId, ambienteId, mesa) {
-    gravar('INSERT INTO mesas (empresa_id, ambiente_id, mesa_id, capacidade, reservavel) VALUES (?, ?, ?, ?, ?)',
-      empresaId, ambienteId, mesa.id, mesa.capacidade, Number(Boolean(mesa.reservavel)));
+    gravar('INSERT INTO mesas (empresa_id, ambiente_id, mesa_id, capacidade, reservavel, descricao) VALUES (?, ?, ?, ?, ?, ?)',
+      empresaId, ambienteId, mesa.id, mesa.capacidade, Number(Boolean(mesa.reservavel)), mesa.descricao || '');
   }
 
   const obterReserva = (empresaId, id) =>
@@ -320,7 +320,7 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
         ON CONFLICT (empresa_id, nome_normalizado) DO NOTHING`, empresaId, nome, nome.toLowerCase());
       return resultado.changes ? { ok: true } : { ok: false, motivo: 'duplicado' };
     },
-    async mesaCriar(empresaId, ambienteNome, { capacidade, reservavel }) {
+    async mesaCriar(empresaId, ambienteNome, { capacidade, reservavel, descricao }) {
       return transacionar(() => {
         const amb = obter('SELECT id FROM ambientes WHERE empresa_id = ? AND nome = ?', empresaId, ambienteNome);
         if (!amb) return null;
@@ -328,7 +328,7 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
         const existentes = new Set(listar('SELECT mesa_id FROM mesas WHERE empresa_id = ?', empresaId).map((m) => m.mesa_id));
         let n = 1;
         while (existentes.has(`${base}${n}`)) n++;
-        const mesa = { id: `${base}${n}`, capacidade, reservavel: reservavel !== false };
+        const mesa = { id: `${base}${n}`, capacidade, reservavel: reservavel !== false, ...(descricao ? { descricao } : {}) };
         inserirMesa(empresaId, amb.id, mesa);
         return mesa;
       });
@@ -382,13 +382,14 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
         return { ok: true, reserva: r };
       });
     },
-    async mesaEditar(empresaId, mesaId, { capacidade, reservavel }) {
+    async mesaEditar(empresaId, mesaId, { capacidade, reservavel, descricao }) {
       return transacionar(() => {
         const linha = obter('SELECT * FROM mesas WHERE empresa_id = ? AND mesa_id = ?', empresaId, mesaId);
         if (!linha) return null;
         const { id, ...antes } = lerMesa(linha);
-        const mesa = { id, capacidade: capacidade ?? antes.capacidade, reservavel: reservavel ?? antes.reservavel };
-        gravar('UPDATE mesas SET capacidade = ?, reservavel = ? WHERE ordem = ?', mesa.capacidade, Number(mesa.reservavel), linha.ordem);
+        const texto = descricao ?? antes.descricao ?? '';
+        const mesa = { id, capacidade: capacidade ?? antes.capacidade, reservavel: reservavel ?? antes.reservavel, ...(texto ? { descricao: texto } : {}) };
+        gravar('UPDATE mesas SET capacidade = ?, reservavel = ?, descricao = ? WHERE ordem = ?', mesa.capacidade, Number(mesa.reservavel), texto, linha.ordem);
         return { antes, mesa };
       });
     },

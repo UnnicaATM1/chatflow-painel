@@ -122,6 +122,7 @@ pub trait Repositorio: Send + Sync {
         ambiente: &str,
         capacidade: i64,
         reservavel: bool,
+        descricao: &str,
     ) -> impl Future<Output = Option<Mesa>> + Send;
     /// Devolve `(antes, depois)` da mesa ou `None` se não existe.
     fn mesa_editar(
@@ -130,6 +131,7 @@ pub trait Repositorio: Send + Sync {
         mesa_id: &str,
         capacidade: Option<i64>,
         reservavel: Option<bool>,
+        descricao: Option<&str>,
     ) -> impl Future<Output = Option<(Mesa, Mesa)>> + Send;
 
     // ---------- reservas ----------

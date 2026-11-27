@@ -13,6 +13,7 @@ export async function mapa(store, empresaId, data, horario) {
       return {
         id: m.id,
         capacidade: m.capacidade,
+        ...(m.descricao ? { descricao: m.descricao } : {}),
         situacao: r ? 'reservada' : 'livre',
         reserva: r ? { horario: r.horario, pessoas: r.pessoas, status: r.status, ...(r.nomeCliente ? { nomeCliente: r.nomeCliente } : {}), ...(r.contato ? { contato: r.contato } : {}) } : null,
       };

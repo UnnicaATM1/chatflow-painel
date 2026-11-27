@@ -417,20 +417,21 @@ test('SQLite: aplica 0002 sobre a versão 1, só uma vez, e reverte uma migraç�
   const db = abrirSql();
   const pasta = dirname(caminho);
   const versao = db.prepare('PRAGMA user_version');
-  assert.equal(versao.get().user_version, 3);
+  assert.equal(versao.get().user_version, 4);
   writeFileSync(join(pasta, '0001_inicial.sql'), 'SELECT 1;');
   writeFileSync(join(pasta, '0002_reserva_mesa_nula.sql'), 'SELECT 1;');
   writeFileSync(join(pasta, '0003_usuarios.sql'), 'SELECT 1;');
-  writeFileSync(join(pasta, '0004_prova.sql'), "CREATE TABLE prova (nome TEXT); INSERT INTO prova VALUES ('uma vez');");
+  writeFileSync(join(pasta, '0004_mesa_descricao.sql'), 'SELECT 1;');
+  writeFileSync(join(pasta, '0005_prova.sql'), "CREATE TABLE prova (nome TEXT); INSERT INTO prova VALUES ('uma vez');");
   aplicarMigracoesSqlite(db, pasta);
   aplicarMigracoesSqlite(db, pasta);
-  assert.equal(versao.get().user_version, 4);
+  assert.equal(versao.get().user_version, 5);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM prova').get().n, 1);
   assert.equal(db.prepare('SELECT nome FROM empresas WHERE id = ?').get(empresa.id).nome, empresa.nome);
 
-  writeFileSync(join(pasta, '0005_falha.sql'), "INSERT INTO prova VALUES ('rollback'); INSERT INTO inexistente VALUES (1);");
-  assert.throws(() => aplicarMigracoesSqlite(db, pasta), /Falha na migração SQLite 0005_falha\.sql/);
-  assert.equal(versao.get().user_version, 4);
+  writeFileSync(join(pasta, '0006_falha.sql'), "INSERT INTO prova VALUES ('rollback'); INSERT INTO inexistente VALUES (1);");
+  assert.throws(() => aplicarMigracoesSqlite(db, pasta), /Falha na migração SQLite 0006_falha\.sql/);
+  assert.equal(versao.get().user_version, 5);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM prova').get().n, 1);
 });
 

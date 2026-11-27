@@ -40,7 +40,7 @@ export async function disponibilidade(store, empresaId, data, horario, pessoas, 
   const porAmbiente = new Map(l.ambientes.map((a) => [a.nome, []]));
   const confirmadas = await store.reservaConfirmadas(empresaId, ignorarId);
   for (const x of livres(l, confirmadas, data, horario, pessoas)) {
-    porAmbiente.get(x.ambiente).push({ id: x.mesa.id, capacidade: x.mesa.capacidade });
+    porAmbiente.get(x.ambiente).push({ id: x.mesa.id, capacidade: x.mesa.capacidade, ...(x.mesa.descricao ? { descricao: x.mesa.descricao } : {}) });
   }
   return {
     ambientes: [...porAmbiente].map(([ambiente, mesas]) => ({ ambiente, mesas: mesas.sort((a, b) => a.capacidade - b.capacidade) })),

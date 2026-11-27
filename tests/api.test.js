@@ -1612,3 +1612,54 @@ testeRepositorio('idempotência via HTTP: mesma chave dentro da validade devolve
   assert.strictEqual((await s.reservaListar('empresa_1')).length, 1, 'e a mesa continua ocupada pela reserva original');
   srv.close();
 });
+
+test('descrição do local da mesa: valida uma linha até 150 caracteres e aparece em estrutura, mapa, disponibilidade e histórico', async () => {
+  const { f, fechar } = await subir();
+  const base = '/empresas/empresa_1';
+  const editar = (body) => f(`${base}/mesas/S1`, { token: T.cliente, method: 'PATCH', body });
+  const daEstrutura = async () => (await (await f(`${base}/estrutura`, { token: T.cliente })).json()).ambientes[0].mesas;
+  const doMapa = async () => (await (await f(`${base}/mapa?data=2026-11-20&horario=20:00`, { token: T.cliente })).json())[0].mesas[0];
+  const livre = async () => (await (await f(`${base}/disponibilidade?data=2026-11-20&horario=20:00&pessoas=2`, { token: T.chat })).json()).ambientes[0].mesas[0];
+
+  // sem descrição, o formato das respostas não muda
+  assert.ok(!('descricao' in (await daEstrutura())[0]));
+  assert.ok(!('descricao' in (await doMapa())));
+  assert.ok(!('descricao' in (await livre())));
+
+  // 150 caracteres acentuados passam (contagem por caractere, não por byte); 151 não
+  const cheio = 'á'.repeat(150);
+  assert.strictEqual((await editar({ descricao: cheio })).status, 200);
+  for (const ruim of ['á'.repeat(151), 'primeira\nsegunda', 'com\ttabulação', 10, null, ['x']]) {
+    const r = await editar({ descricao: ruim });
+    assert.strictEqual(r.status, 400, JSON.stringify(ruim));
+  }
+  assert.strictEqual((await daEstrutura())[0].descricao, cheio);
+
+  const texto = 'Encostada na parede do bar, com visão para a entrada';
+  const r = await editar({ descricao: `  ${texto}  ` });
+  assert.strictEqual((await r.json()).descricao, texto);
+  assert.strictEqual((await daEstrutura())[0].descricao, texto);
+  assert.strictEqual((await doMapa()).descricao, texto);
+  assert.strictEqual((await livre()).descricao, texto);
+
+  // editar outro campo preserva a descrição
+  await editar({ capacidade: 6 });
+  assert.strictEqual((await daEstrutura())[0].descricao, texto);
+
+  // mesa nova com descrição; inválida não cria
+  const criar = (body) => f(`${base}/mesas`, { token: T.cliente, method: 'POST', body: { ambiente: 'salao', capacidade: 2, ...body } });
+  assert.strictEqual((await criar({ descricao: 'x'.repeat(151) })).status, 400);
+  assert.strictEqual((await daEstrutura()).length, 1);
+  const nova = await (await criar({ descricao: 'Perto da área verde' })).json();
+  assert.strictEqual(nova.descricao, 'Perto da área verde');
+  assert.strictEqual((await daEstrutura())[1].descricao, 'Perto da área verde');
+
+  // vazio apaga
+  assert.strictEqual((await editar({ descricao: '   ' })).status, 200);
+  assert.ok(!('descricao' in (await daEstrutura())[0]));
+
+  const hist = await (await f(`${base}/historico?entidade=mesa&id=S1`, { token: T.cliente })).json();
+  const mudancas = hist.filter((e) => e.depois && 'descricao' in e.depois).map((e) => [e.antes.descricao, e.depois.descricao]);
+  assert.deepStrictEqual(mudancas.sort((a, b) => a[0].length - b[0].length), [['', cheio], [texto, ''], [cheio, texto]].sort((a, b) => a[0].length - b[0].length));
+  fechar();
+});

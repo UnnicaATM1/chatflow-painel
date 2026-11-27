@@ -112,7 +112,7 @@
         return h('div', { key: a.ambiente }, h('div', { className: 'rotulo', style: { marginBottom: 8 } }, a.ambiente),
           a.mesas.length === 0 ? h('div', { className: 'rotulo' }, 'Sem mesas livres') :
             h('div', { className: 'mesas' }, a.mesas.map(function (m) {
-              return h('button', { key: m.id, type: 'button', className: 'mesa', 'data-situacao': 'livre', onClick: function () { reservar(m.id); } }, h('b', null, m.id), m.capacidade + ' lugares · reservar');
+              return h('button', { key: m.id, type: 'button', className: 'mesa', 'data-situacao': 'livre', onClick: function () { reservar(m.id); } }, h('b', null, m.id), m.capacidade + ' lugares · reservar', m.descricao && h('span', { className: 'mesa-local' }, m.descricao));
             })));
       }));
   }
@@ -172,7 +172,7 @@
         disp && disp.ambientes.map(function (a) {
           return h('div', { key: a.ambiente }, h('div', { className: 'rotulo', style: { marginBottom: 6 } }, a.ambiente),
             a.mesas.length === 0 ? h('div', { className: 'rotulo' }, 'Sem mesas livres') : h('div', { className: 'mesas' }, a.mesas.map(function (m) {
-              return h('button', { key: m.id, type: 'button', className: 'mesa', 'data-situacao': 'livre', 'aria-pressed': String(f.mesaId === m.id), onClick: function () { setF(Object.assign({}, f, { mesaId: m.id })); } }, h('b', null, m.id), m.capacidade + ' lugares');
+              return h('button', { key: m.id, type: 'button', className: 'mesa', 'data-situacao': 'livre', 'aria-pressed': String(f.mesaId === m.id), onClick: function () { setF(Object.assign({}, f, { mesaId: m.id })); } }, h('b', null, m.id), m.capacidade + ' lugares', m.descricao && h('span', { className: 'mesa-local' }, m.descricao));
             })));
         }),
         msg && h('div', { className: 'erro', role: 'alert' }, msg),
@@ -234,6 +234,7 @@
         mesa && h('div', { className: 'k1-stack' },
           h('div', { className: 'mono', style: { fontSize: 20, fontWeight: 700 } }, mesa.id),
           h('div', null, mesa.ambiente + ' · ' + mesa.capacidade + ' lugares'),
+          mesa.descricao && h('div', { style: { color: 'var(--ink-muted)', overflowWrap: 'anywhere' } }, mesa.descricao),
           mesa.reserva
             ? h('div', { className: 'k1-stack' }, h('span', { className: 'k1-pill k1-pill-concluida' }, 'Confirmada'),
               h('div', null, 'Horário: ', h('b', { className: 'mono' }, mesa.reserva.horario)), h('div', null, 'Pessoas: ', h('b', { className: 'mono' }, mesa.reserva.pessoas)),
@@ -252,9 +253,17 @@
       + '. Cancele ' + (plural ? 'essas reservas' : 'a reserva') + ' na aba Reservas e tente de novo.';
   }
 
+  // Uma linha que descreve o local da mesa (até 150 caracteres). Aparece no mapa, na reserva e na consulta de disponibilidade.
+  function CampoDescricaoMesa(p) {
+    return h('label', { className: 'k1-row mesa-campo-descricao' }, h('span', { className: 'rotulo' }, 'Descrição do local'),
+      h('input', { type: 'text', value: p.valor, maxLength: 150, placeholder: 'Ex.: encostada na parede do bar, com visão para a entrada', 'aria-label': p.rotulo, onChange: function (e) { p.aoMudar(e.target.value); }, onKeyDown: function (e) { if (e.key === 'Enter' && p.aoConfirmar) { e.preventDefault(); p.aoConfirmar(); } } }),
+      h('span', { className: 'rotulo mono' }, p.valor.length + '/150'));
+  }
+
   function LinhaMesa(p) {
     var m = p.mesa;
     var sc = useState(String(m.capacidade)), cap = sc[0], setCap = sc[1];
+    var sd = useState(m.descricao || ''), desc = sd[0], setDesc = sd[1];
     var se = useState(''), msg = se[0], setMsg = se[1];
     var sr = useState(false), confRemover = sr[0], setConfRemover = sr[1];
     var conflito = msg.indexOf('Não dá para remover') === 0;
@@ -267,14 +276,15 @@
         .then(function () { p.recarregar(); })
         .catch(function (e) { setConfRemover(false); setMsg(e.status === 409 ? textoConflito(e, 'a mesa ' + m.id) : e.message); });
     }
-    return h('div', { className: 'k1-stack', style: { gap: 4 } },
+    return h('div', { className: 'k1-stack', style: { gap: 4, paddingBottom: 12, borderBottom: '1px solid var(--border)' } },
       h('div', { className: 'k1-row', style: { padding: '6px 0' } },
         h('b', { className: 'mono', style: { minWidth: 90 } }, m.id),
         h('label', { className: 'k1-row' }, 'Lugares', h('input', { type: 'number', min: 1, max: 100, value: cap, style: { width: 72 }, onChange: function (e) { setCap(e.target.value); } })),
-        h(K.Button, { variant: 'secondary', onClick: function () { salvar({ capacidade: Number(cap) }); } }, 'Salvar'),
+        h(K.Button, { variant: 'secondary', onClick: function () { salvar({ capacidade: Number(cap), descricao: desc }); } }, 'Salvar'),
         h(K.Button, { variant: m.reservavel ? 'neutral' : 'primary', onClick: function () { salvar({ reservavel: !m.reservavel }); } }, m.reservavel ? 'Bloquear reservas' : 'Liberar reservas'),
         !confRemover && h(K.Button, { variant: 'danger', 'aria-label': 'Remover a mesa ' + m.id, onClick: function () { setMsg(''); setConfRemover(true); } }, 'Remover mesa'),
         !conflito && h('span', { className: 'rotulo' }, msg)),
+      h(CampoDescricaoMesa, { valor: desc, rotulo: 'Descrição do local da mesa ' + m.id, aoMudar: function (v) { setDesc(v); setMsg(''); }, aoConfirmar: function () { salvar({ descricao: desc }); } }),
       confRemover && h('div', { className: 'k1-row', role: 'alert' },
         h('span', null, 'Remover a mesa ' + m.id + '? Reservas canceladas ou passadas ficam sem mesa e continuam no histórico.'),
         h(K.Button, { variant: 'danger', onClick: remover }, 'Confirmar remoção'),
@@ -348,13 +358,15 @@
 
   function NovaMesa(p) {
     var sv = useState('4'), cap = sv[0], setCap = sv[1];
+    var sd = useState(''), desc = sd[0], setDesc = sd[1];
     var sm = useState(''), msg = sm[0], setMsg = sm[1];
     function criar() {
-      api(p.token, 'POST', '/empresas/' + encodeURIComponent(p.empresa) + '/mesas', { ambiente: p.ambiente, capacidade: Number(cap) })
-        .then(function () { setMsg(''); p.recarregar(); }).catch(function (e) { setMsg(e.message); });
+      api(p.token, 'POST', '/empresas/' + encodeURIComponent(p.empresa) + '/mesas', { ambiente: p.ambiente, capacidade: Number(cap), descricao: desc })
+        .then(function () { setMsg(''); setDesc(''); p.recarregar(); }).catch(function (e) { setMsg(e.message); });
     }
     return h('div', { className: 'k1-row', style: { padding: '6px 0' } },
       h('label', { className: 'k1-row' }, 'Lugares', h('input', { type: 'number', min: 1, max: 100, value: cap, style: { width: 72 }, 'aria-label': 'Lugares da nova mesa em ' + p.ambiente, onChange: function (e) { setCap(e.target.value); } })),
+      h(CampoDescricaoMesa, { valor: desc, rotulo: 'Descrição do local da nova mesa em ' + p.ambiente, aoMudar: setDesc }),
       h(K.Button, { variant: 'secondary', onClick: criar }, '+ Nova mesa'),
       msg && h('span', { className: 'erro', role: 'alert' }, msg));
   }
@@ -425,7 +437,7 @@
       reservasOn && est.ambientes.length === 0 && h(K.EmptyState, null, 'Nenhum ambiente cadastrado. Crie o primeiro abaixo para poder cadastrar mesas e receber reservas.'),
       reservasOn && est.ambientes.map(function (a) {
         return h('div', { key: a.nome }, h(CabecalhoAmbiente, { ambiente: a, token: p.token, empresa: p.empresa, recarregar: carregar }),
-          a.mesas.map(function (m) { return h(LinhaMesa, { key: m.id + m.capacidade + m.reservavel, mesa: m, token: p.token, empresa: p.empresa, recarregar: carregar }); }),
+          a.mesas.map(function (m) { return h(LinhaMesa, { key: m.id + '|' + m.capacidade + '|' + m.reservavel + '|' + (m.descricao || ''), mesa: m, token: p.token, empresa: p.empresa, recarregar: carregar }); }),
           h(NovaMesa, { key: 'nova-' + a.nome + a.mesas.length, ambiente: a.nome, token: p.token, empresa: p.empresa, recarregar: carregar }));
       }),
       reservasOn && h(NovoAmbiente, { token: p.token, empresa: p.empresa, recarregar: carregar }),
@@ -823,7 +835,7 @@
       if (mod.reservas) {
         lista.push({
           name: 'one_disponibilidade', method: 'GET', url: o + '/empresas/' + id + '/disponibilidade?data={{data}}&horario={{horario}}&pessoas={{pessoas}}', headers: auth,
-          description: 'Consulta as mesas livres em uma data e horário, separadas por ambiente. Chame SEMPRE antes de oferecer ou registrar reserva.',
+          description: 'Consulta as mesas livres em uma data e horário, separadas por ambiente. Chame SEMPRE antes de oferecer ou registrar reserva. Quando a mesa vier com "descricao", use essa frase para explicar o local ao cliente, sem inventar detalhes.',
           parameters: { type: 'object', properties: { data: { type: 'string', description: 'AAAA-MM-DD' }, horario: { type: 'string', description: 'HH:MM' }, pessoas: { type: 'integer', minimum: 1 } }, required: ['data', 'horario', 'pessoas'] },
         });
         lista.push({

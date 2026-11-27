@@ -7,6 +7,8 @@ pub struct Mesa {
     pub id: String,
     pub capacidade: i64,
     pub reservavel: bool,
+    /// Descrição do local da mesa; vazio = sem descrição.
+    pub descricao: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -99,6 +101,11 @@ impl Empresa {
                         .and_then(Json::as_i64)
                         .ok_or("mesa sem capacidade")?,
                     reservavel: m.get("reservavel").and_then(Json::as_bool).unwrap_or(false),
+                    descricao: m
+                        .get("descricao")
+                        .and_then(Json::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                 });
             }
             ambientes.push(Ambiente {

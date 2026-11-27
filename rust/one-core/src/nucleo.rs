@@ -441,7 +441,22 @@ fn ambiente_json(ambiente: &Ambiente) -> Json {
 }
 
 fn mesa_json(m: &one_store::Mesa) -> Json {
-    json!({ "id": m.id, "capacidade": m.capacidade, "reservavel": m.reservavel })
+    let mut v = json!({ "id": m.id, "capacidade": m.capacidade, "reservavel": m.reservavel });
+    if !m.descricao.is_empty() {
+        v["descricao"] = m.descricao.clone().into();
+    }
+    v
+}
+
+const ERRO_DESCRICAO_MESA: &str = "descrição da mesa deve ter uma linha com até 150 caracteres";
+
+/// Descrição do local da mesa: uma linha de texto, até 150 caracteres; vazio apaga. `None` quando inválida.
+fn descricao_de_mesa(valor: &Json) -> Option<&str> {
+    let texto = valor.as_str()?.trim();
+    let invalida = texto
+        .chars()
+        .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}');
+    (!invalida && texto.chars().count() <= 150).then_some(texto)
 }
 
 async fn registrar_gestao<R: Repositorio>(
@@ -1279,7 +1294,7 @@ async fn rotear<R: Repositorio>(
             }
         };
     }
-    // PATCH /empresas/:id/mesas/:mesaId { capacidade?, reservavel? }
+    // PATCH /empresas/:id/mesas/:mesaId { capacidade?, reservavel?, descricao? }
     if p(0) == Some("empresas") && p(2) == Some("mesas") && partes.len() == 4 && m == "PATCH" {
         so_staff(staff)?;
         let l = empresa(repo, &dec(p(1).unwrap_or(""))?).await?;
@@ -1310,15 +1325,22 @@ async fn rotear<R: Repositorio>(
                 None => return erro(400, "reservavel inválido"),
             }
         }
+        let mut descricao = None;
+        if let Some(d) = b.get("descricao") {
+            match descricao_de_mesa(d) {
+                Some(x) => descricao = Some(x),
+                None => return erro(400, ERRO_DESCRICAO_MESA),
+            }
+        }
         let Some((antes, depois)) = repo
-            .mesa_editar(&l.id, &mesa_id, capacidade, reservavel)
+            .mesa_editar(&l.id, &mesa_id, capacidade, reservavel, descricao)
             .await
         else {
             return erro(404, "mesa inexistente");
         };
         let (da, dd) = diff(
-            json!({ "capacidade": antes.capacidade, "reservavel": antes.reservavel }).as_object(),
-            json!({ "capacidade": depois.capacidade, "reservavel": depois.reservavel }).as_object(),
+            json!({ "capacidade": antes.capacidade, "reservavel": antes.reservavel, "descricao": antes.descricao }).as_object(),
+            json!({ "capacidade": depois.capacidade, "reservavel": depois.reservavel, "descricao": depois.descricao }).as_object(),
         );
         if !dd.is_empty() {
             let mut ev = vec![
@@ -1823,7 +1845,7 @@ async fn rotear<R: Repositorio>(
         registrar(repo, evento(ev)).await;
         return passa(cors, 201, json!({ "nome": nome, "mesas": [] }));
     }
-    // POST /empresas/:id/mesas { ambiente, capacidade, reservavel? }
+    // POST /empresas/:id/mesas { ambiente, capacidade, reservavel?, descricao? }
     if recurso == "mesas" && m == "POST" {
         so_staff(staff)?;
         let l = empresa(repo, &empresa_id).await?;
@@ -1840,8 +1862,15 @@ async fn rotear<R: Repositorio>(
             return erro(400, "capacidade inválida");
         };
         let reservavel = !matches!(b.get("reservavel"), Some(Json::Bool(false)));
+        let descricao = match b.get("descricao") {
+            None => "",
+            Some(d) => match descricao_de_mesa(d) {
+                Some(x) => x,
+                None => return erro(400, ERRO_DESCRICAO_MESA),
+            },
+        };
         let Some(mesa) = repo
-            .mesa_criar(&l.id, &amb.nome, capacidade, reservavel)
+            .mesa_criar(&l.id, &amb.nome, capacidade, reservavel, descricao)
             .await
         else {
             return erro(404, "ambiente inexistente");
@@ -1853,7 +1882,11 @@ async fn rotear<R: Repositorio>(
             ("acao", "criada".into()),
         ];
         ev.extend(ator.pares());
-        ev.push(("depois", json!({ "ambiente": amb.nome, "capacidade": mesa.capacidade, "reservavel": mesa.reservavel })));
+        let mut criada = json!({ "ambiente": amb.nome, "capacidade": mesa.capacidade, "reservavel": mesa.reservavel });
+        if !mesa.descricao.is_empty() {
+            criada["descricao"] = mesa.descricao.clone().into();
+        }
+        ev.push(("depois", criada));
         registrar(repo, evento(ev)).await;
         return passa(cors, 201, mesa_json(&mesa));
     }

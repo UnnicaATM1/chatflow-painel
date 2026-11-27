@@ -24,7 +24,11 @@ pub async fn mapa<R: Repositorio>(
                 .mesas
                 .iter()
                 .map(|m| {
-                    let r = confirmadas.iter().find(|x| x.mesa_id.as_deref() == Some(m.id.as_str()) && i < x.fim && i + DURACAO_MIN > x.inicio);
+                    let r = confirmadas.iter().find(|x| {
+                        x.mesa_id.as_deref() == Some(m.id.as_str())
+                            && i < x.fim
+                            && i + DURACAO_MIN > x.inicio
+                    });
                     let reserva = r.map_or(Json::Null, |r| {
                         let mut o = Map::new();
                         o.insert("horario".into(), r.horario.clone().into());
@@ -38,7 +42,13 @@ pub async fn mapa<R: Repositorio>(
                         }
                         Json::Object(o)
                     });
-                    json!({ "id": m.id, "capacidade": m.capacidade, "situacao": if r.is_some() { "reservada" } else { "livre" }, "reserva": reserva })
+                    let mut mesa = json!({ "id": m.id, "capacidade": m.capacidade });
+                    if !m.descricao.is_empty() {
+                        mesa["descricao"] = m.descricao.clone().into();
+                    }
+                    mesa["situacao"] = if r.is_some() { "reservada" } else { "livre" }.into();
+                    mesa["reserva"] = json!(reserva);
+                    mesa
                 })
                 .collect();
             json!({ "ambiente": a.nome, "mesas": mesas })

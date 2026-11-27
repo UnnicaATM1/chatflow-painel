@@ -455,6 +455,7 @@ impl Repositorio for Memoria {
         ambiente: &str,
         capacidade: i64,
         reservavel: bool,
+        descricao: &str,
     ) -> Option<Mesa> {
         let mut est = self.est();
         let e = est.empresa_mut(empresa_id)?;
@@ -477,6 +478,7 @@ impl Repositorio for Memoria {
             id: format!("{base}{n}"),
             capacidade,
             reservavel,
+            descricao: descricao.to_string(),
         };
         amb.mesas.push(mesa.clone());
         Some(mesa)
@@ -488,6 +490,7 @@ impl Repositorio for Memoria {
         mesa_id: &str,
         capacidade: Option<i64>,
         reservavel: Option<bool>,
+        descricao: Option<&str>,
     ) -> Option<(Mesa, Mesa)> {
         let mut est = self.est();
         let e = est.empresa_mut(empresa_id)?;
@@ -502,6 +505,9 @@ impl Repositorio for Memoria {
         }
         if let Some(r) = reservavel {
             mesa.reservavel = r;
+        }
+        if let Some(d) = descricao {
+            mesa.descricao = d.to_string();
         }
         Some((antes, mesa.clone()))
     }
@@ -1076,6 +1082,7 @@ mod testes {
                     id: "S1".into(),
                     capacidade: 4,
                     reservavel: true,
+                    descricao: String::new(),
                 }],
             }],
             Modulos::default(),

@@ -196,7 +196,7 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
       return { ok: true };
     },
     // Cria a mesa com o próximo id livre (letra do ambiente + número). Devolve a mesa ou null se o ambiente não existe.
-    async mesaCriar(empresaId, ambienteNome, { capacidade, reservavel }) {
+    async mesaCriar(empresaId, ambienteNome, { capacidade, reservavel, descricao }) {
       const e = empresas.get(empresaId);
       const amb = e.ambientes.find((a) => a.nome === ambienteNome);
       if (!amb) return null;
@@ -204,7 +204,7 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
       const existentes = new Set(e.ambientes.flatMap((a) => a.mesas.map((m) => m.id)));
       let n = 1;
       while (existentes.has(`${base}${n}`)) n++;
-      const mesa = { id: `${base}${n}`, capacidade, reservavel: reservavel !== false };
+      const mesa = { id: `${base}${n}`, capacidade, reservavel: reservavel !== false, ...(descricao ? { descricao } : {}) };
       amb.mesas.push(mesa);
       return mesa;
     },
@@ -243,12 +243,14 @@ export function criarRepositorioMemoria({ plat, sink, idempotenciaTtlMs, idempot
       return { ok: true, reservasDesligadas: desligadas.sort() };
     },
     // Devolve { antes, mesa } ou null se a mesa não existe.
-    async mesaEditar(empresaId, mesaId, { capacidade, reservavel }) {
+    async mesaEditar(empresaId, mesaId, { capacidade, reservavel, descricao }) {
       const mesa = empresas.get(empresaId).ambientes.flatMap((a) => a.mesas).find((m) => m.id === mesaId);
       if (!mesa) return null;
-      const antes = { capacidade: mesa.capacidade, reservavel: mesa.reservavel };
+      const antes = { capacidade: mesa.capacidade, reservavel: mesa.reservavel, ...(mesa.descricao ? { descricao: mesa.descricao } : {}) };
       if (capacidade !== undefined) mesa.capacidade = capacidade;
       if (reservavel !== undefined) mesa.reservavel = reservavel;
+      if (descricao) mesa.descricao = descricao;
+      else if (descricao === '') delete mesa.descricao;
       return { antes, mesa };
     },
 

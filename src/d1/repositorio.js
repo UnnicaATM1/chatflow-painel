@@ -30,7 +30,7 @@ function congelar(objeto) {
 }
 
 const lerEvento = (linha) => linha ? congelar({ seq: linha.seq, ...JSON.parse(linha.evento) }) : null;
-const lerMesa = ({ mesa_id, capacidade, reservavel }) => ({ id: mesa_id, capacidade, reservavel: Boolean(reservavel) });
+const lerMesa = ({ mesa_id, capacidade, reservavel, descricao }) => ({ id: mesa_id, capacidade, reservavel: Boolean(reservavel), ...(descricao ? { descricao } : {}) });
 
 export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHATFLOW_FUSO,
   idempotenciaTtlMs, idempotenciaMax } = {}) {
@@ -145,7 +145,7 @@ export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHA
     async function lerEmpresa(linha, incluirConhecimento) {
       if (!linha) return null;
       const { id, nome, agente, chave, modulos, prox_conhecimento } = linha;
-      const layout = await listar(`SELECT a.id AS ambiente_id, a.nome, m.mesa_id, m.capacidade, m.reservavel
+      const layout = await listar(`SELECT a.id AS ambiente_id, a.nome, m.mesa_id, m.capacidade, m.reservavel, m.descricao
         FROM ambientes a LEFT JOIN mesas m ON m.ambiente_id = a.id AND m.empresa_id = a.empresa_id
         WHERE a.empresa_id = ? ORDER BY a.id, m.ordem`, id);
       const ambientes = new Map();
@@ -277,9 +277,9 @@ export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHA
         for (const a of ambientes) {
           gravar('INSERT INTO ambientes (empresa_id, nome, nome_normalizado) VALUES (?, ?, ?)', id, a.nome, a.nome.toLowerCase());
           for (const m of a.mesas) {
-            gravar(`INSERT INTO mesas (empresa_id, ambiente_id, mesa_id, capacidade, reservavel)
-              SELECT empresa_id, id, ?, ?, ? FROM ambientes WHERE empresa_id = ? AND nome = ?`,
-            m.id, m.capacidade, Number(Boolean(m.reservavel)), id, a.nome);
+            gravar(`INSERT INTO mesas (empresa_id, ambiente_id, mesa_id, capacidade, reservavel, descricao)
+              SELECT empresa_id, id, ?, ?, ?, ? FROM ambientes WHERE empresa_id = ? AND nome = ?`,
+            m.id, m.capacidade, Number(Boolean(m.reservavel)), m.descricao || '', id, a.nome);
           }
         }
         const usados = new Set();
@@ -291,7 +291,7 @@ export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHA
             ...valoresReserva(plat.uuid(), id, codigo, r));
         }
         return { id, nome, agente, ambientes: ambientes.map((a) => ({ nome: a.nome,
-          mesas: a.mesas.map((m) => ({ id: m.id, capacidade: m.capacidade, reservavel: Boolean(m.reservavel) })) })),
+          mesas: a.mesas.map((m) => ({ id: m.id, capacidade: m.capacidade, reservavel: Boolean(m.reservavel), ...(m.descricao ? { descricao: m.descricao } : {}) })) })),
         chave: null, modulos: finais, conhecimento: [], proxConhecimento: 1 };
       },
       async empresaRenomear(id, nome) {
@@ -346,24 +346,25 @@ export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHA
         gravar('DELETE FROM ambientes WHERE id = ?', atual.id);
         return { ok: true, mesasRemovidas: mesas.map((m) => m.mesa_id) };
       },
-      async mesaCriar(empresa, ambiente, { capacidade, reservavel }) {
+      async mesaCriar(empresa, ambiente, { capacidade, reservavel, descricao }) {
         const atual = await obter('SELECT id FROM ambientes WHERE empresa_id = ? AND nome = ?', empresa, ambiente);
         if (!atual) return null;
         const base = (ambiente.match(/[A-Za-z]/) || ['M'])[0].toUpperCase();
         const ids = new Set((await listar('SELECT mesa_id FROM mesas WHERE empresa_id = ?', empresa)).map((m) => m.mesa_id));
         let n = 1;
         while (ids.has(`${base}${n}`)) n++;
-        const mesa = { id: `${base}${n}`, capacidade, reservavel: reservavel !== false };
-        gravar('INSERT INTO mesas (empresa_id, ambiente_id, mesa_id, capacidade, reservavel) VALUES (?, ?, ?, ?, ?)',
-          empresa, atual.id, mesa.id, mesa.capacidade, Number(mesa.reservavel));
+        const mesa = { id: `${base}${n}`, capacidade, reservavel: reservavel !== false, ...(descricao ? { descricao } : {}) };
+        gravar('INSERT INTO mesas (empresa_id, ambiente_id, mesa_id, capacidade, reservavel, descricao) VALUES (?, ?, ?, ?, ?, ?)',
+          empresa, atual.id, mesa.id, mesa.capacidade, Number(mesa.reservavel), descricao || '');
         return mesa;
       },
-      async mesaEditar(empresa, mesaId, { capacidade, reservavel }) {
+      async mesaEditar(empresa, mesaId, { capacidade, reservavel, descricao }) {
         const atual = await obter('SELECT * FROM mesas WHERE empresa_id = ? AND mesa_id = ?', empresa, mesaId);
         if (!atual) return null;
         const { id, ...antes } = lerMesa(atual);
-        const mesa = { id, capacidade: capacidade ?? antes.capacidade, reservavel: reservavel ?? antes.reservavel };
-        gravar('UPDATE mesas SET capacidade = ?, reservavel = ? WHERE ordem = ?', mesa.capacidade, Number(mesa.reservavel), atual.ordem);
+        const texto = descricao ?? antes.descricao ?? '';
+        const mesa = { id, capacidade: capacidade ?? antes.capacidade, reservavel: reservavel ?? antes.reservavel, ...(texto ? { descricao: texto } : {}) };
+        gravar('UPDATE mesas SET capacidade = ?, reservavel = ?, descricao = ? WHERE ordem = ?', mesa.capacidade, Number(mesa.reservavel), texto, atual.ordem);
         return { antes, mesa };
       },
       async mesaRemover(empresa, mesaId) {

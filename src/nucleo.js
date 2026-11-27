@@ -86,8 +86,17 @@ async function mudarReserva(store, lid, rid, operacao, ator, extra) {
   return r;
 }
 
-function mesaPublica({ id, capacidade, reservavel }) {
-  return { id, capacidade, reservavel: reservavel === true };
+function mesaPublica({ id, capacidade, reservavel, descricao }) {
+  return { id, capacidade, reservavel: reservavel === true, ...(descricao ? { descricao } : {}) };
+}
+
+// Descrição do local da mesa: uma linha de texto, até 150 caracteres; vazio apaga. Devolve null quando inválida.
+const LIMITE_DESCRICAO_MESA = 150;
+const ERRO_DESCRICAO_MESA = 'descrição da mesa deve ter uma linha com até 150 caracteres';
+function descricaoDeMesa(valor) {
+  if (typeof valor !== 'string') return null;
+  const texto = valor.trim();
+  return /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(texto) || [...texto].length > LIMITE_DESCRICAO_MESA ? null : texto;
 }
 
 async function mudarLayout(store, empresaId, recurso, id, metodo, nome, ator) {
@@ -419,7 +428,7 @@ export async function tratar(req, ctx) {
       }
       return resp(...await mudarLayout(store, lid, partes[2], id, req.metodo, nome, quem(req, papel, auth)));
     }
-    // PATCH /empresas/:id/mesas/:mesaId  { capacidade?, reservavel? }
+    // PATCH /empresas/:id/mesas/:mesaId  { capacidade?, reservavel?, descricao? }
     if (partes[0] === 'empresas' && partes[2] === 'mesas' && partes.length === 4 && req.metodo === 'PATCH') {
       if (!staff) return semPermissao();
       const l = await empresa(store, idDe(1));
@@ -428,16 +437,21 @@ export async function tratar(req, ctx) {
       const mesa = l.ambientes.flatMap((a) => a.mesas).find((m) => m.id === mesaId);
       if (!mesa) return resp(404, { erro: 'mesa inexistente' });
       const b = await lerCorpo(req);
-      const antesMesa = { capacidade: mesa.capacidade, reservavel: mesa.reservavel };
+      const antesMesa = { capacidade: mesa.capacidade, reservavel: mesa.reservavel, descricao: mesa.descricao || '' };
       if (b.capacidade !== undefined) {
         if (!Number.isInteger(b.capacidade) || b.capacidade < 1 || b.capacidade > 100) return resp(400, { erro: 'capacidade inválida' });
       }
       if (b.reservavel !== undefined) {
         if (typeof b.reservavel !== 'boolean') return resp(400, { erro: 'reservavel inválido' });
       }
-      const editada = await store.mesaEditar(l.id, mesaId, { capacidade: b.capacidade, reservavel: b.reservavel });
+      let descricao;
+      if (b.descricao !== undefined) {
+        descricao = descricaoDeMesa(b.descricao);
+        if (descricao === null) return resp(400, { erro: ERRO_DESCRICAO_MESA });
+      }
+      const editada = await store.mesaEditar(l.id, mesaId, { capacidade: b.capacidade, reservavel: b.reservavel, descricao });
       if (!editada) return resp(404, { erro: 'mesa inexistente' });
-      const dm = diff(antesMesa, { capacidade: editada.mesa.capacidade, reservavel: editada.mesa.reservavel });
+      const dm = diff(antesMesa, { capacidade: editada.mesa.capacidade, reservavel: editada.mesa.reservavel, descricao: editada.mesa.descricao || '' });
       if (Object.keys(dm.depois).length) await registrar(store, { empresaId: l.id, entidade: 'mesa', entidadeId: mesaId, acao: 'editada', ...quem(req, papel, auth), ...dm });
       return resp(200, editada.mesa);
     }
@@ -638,7 +652,7 @@ export async function tratar(req, ctx) {
       await registrar(store, { empresaId: l.id, entidade: 'ambiente', entidadeId: nome, acao: 'criada', ...quem(req, papel, auth), depois: { nome } });
       return resp(201, { nome, mesas: [] });
     }
-    // POST /empresas/:id/mesas { ambiente, capacidade, reservavel? }
+    // POST /empresas/:id/mesas { ambiente, capacidade, reservavel?, descricao? }
     if (recurso === 'mesas' && req.metodo === 'POST') {
       if (!staff) return semPermissao();
       const l = await empresa(store, empresaId);
@@ -646,8 +660,10 @@ export async function tratar(req, ctx) {
       const amb = l.ambientes.find((a) => a.nome === b.ambiente);
       if (!amb) return resp(404, { erro: 'ambiente inexistente' });
       if (!Number.isInteger(b.capacidade) || b.capacidade < 1 || b.capacidade > 100) return resp(400, { erro: 'capacidade inválida' });
-      const mesa = await store.mesaCriar(l.id, amb.nome, { capacidade: b.capacidade, reservavel: b.reservavel });
-      await registrar(store, { empresaId: l.id, entidade: 'mesa', entidadeId: mesa.id, acao: 'criada', ...quem(req, papel, auth), depois: { ambiente: amb.nome, capacidade: mesa.capacidade, reservavel: mesa.reservavel } });
+      const descricao = b.descricao === undefined ? '' : descricaoDeMesa(b.descricao);
+      if (descricao === null) return resp(400, { erro: ERRO_DESCRICAO_MESA });
+      const mesa = await store.mesaCriar(l.id, amb.nome, { capacidade: b.capacidade, reservavel: b.reservavel, descricao });
+      await registrar(store, { empresaId: l.id, entidade: 'mesa', entidadeId: mesa.id, acao: 'criada', ...quem(req, papel, auth), depois: { ambiente: amb.nome, capacidade: mesa.capacidade, reservavel: mesa.reservavel, ...(descricao ? { descricao } : {}) } });
       return resp(201, mesa);
     }
     if (recurso === 'estrutura' && req.metodo === 'GET') {
