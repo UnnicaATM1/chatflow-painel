@@ -16,6 +16,8 @@
   .rotulo { font: 500 10px/14px var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-muted); }
   input, select { font: 400 13px/20px var(--font-sans); padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-card); color: var(--ink); }
   input:focus-visible, select:focus-visible { outline: 2px solid var(--brand-500); outline-offset: 1px; }
+  /* Texto de exemplo em cinza claro, em todos os campos, para não parecer preenchido. */
+  input::placeholder, textarea::placeholder { color: var(--ink-subtle); opacity: 1; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; font: 500 10px/14px var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-muted); padding: 8px; border-bottom: 1px solid var(--border); }
   td { padding: 8px; border-bottom: 1px solid var(--border); }
