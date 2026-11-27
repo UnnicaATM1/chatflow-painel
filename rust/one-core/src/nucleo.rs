@@ -521,7 +521,8 @@ async fn mudar_reserva<R: Repositorio>(
         antes.as_ref().and_then(Json::as_object),
         r.get("reserva").and_then(Json::as_object),
     );
-    if !dd.is_empty() {
+    // campo apagado só aparece em `antes`: também é mudança
+    if !dd.is_empty() || !da.is_empty() {
         let acao = match (extra, dd.get("status").and_then(Json::as_str)) {
             (Some((a, _)), _) => a,
             (None, Some("cancelada")) => "cancelada",
@@ -573,7 +574,29 @@ async fn desfazer<R: Repositorio>(repo: &R, lid: &str, seq: i64, ator: &Ator) ->
             }
         }
     }
+    // campo que a mudança apagou: se voltou a ter valor, há mudança posterior
+    if let Some(ant) = ev["antes"].as_object() {
+        if ant
+            .keys()
+            .any(|k| ev["depois"].get(k).is_none() && pub_atual.get(k).is_some())
+        {
+            return erro(
+                409,
+                "há mudanças posteriores nesta reserva; desfaça na ordem inversa",
+            );
+        }
+    }
     let antes = &ev["antes"];
+    // dados do cliente que a edição mudou voltam ao valor anterior ("" apaga o que não existia)
+    let voltar = |k: &str| {
+        (antes.get(k).is_some() || ev["depois"].get(k).is_some()).then(|| {
+            antes
+                .get(k)
+                .filter(|v| !v.is_null())
+                .cloned()
+                .unwrap_or_else(|| Json::from(""))
+        })
+    };
     let op = if ev["acao"] == "criada" || antes["status"] == "cancelada" {
         Op::Cancelar
     } else if antes["status"] == "confirmada" {
@@ -584,7 +607,9 @@ async fn desfazer<R: Repositorio>(repo: &R, lid: &str, seq: i64, ator: &Ator) ->
             data: antes.get("data").cloned(),
             horario: antes.get("horario").cloned(),
             mesa_id: antes.get("mesaId").cloned(),
-            ..Mudancas::default()
+            nome_cliente: voltar("nomeCliente"),
+            contato: voltar("contato"),
+            observacao: voltar("observacao"),
         }))
     };
     mudar_reserva(repo, lid, &rid, op, ator, Some(("desfeita", seq))).await
@@ -1408,6 +1433,7 @@ async fn rotear<R: Repositorio>(
                     mesa_id: b.get("mesaId").cloned(),
                     nome_cliente: b.get("nomeCliente").cloned(),
                     contato: b.get("contato").cloned(),
+                    observacao: b.get("observacao").cloned(),
                 })),
             }
         };
@@ -1556,7 +1582,12 @@ async fn rotear<R: Repositorio>(
     }
     // GET /empresas/:id/contexto: tudo o que o agente precisa em uma chamada (config, conhecimento, recursos e prompt pronto)
     if recurso == "contexto" && m == "GET" {
-        return passa(cors, 200, contexto(repo, &empresa_id).await?);
+        let agora = ctx.plat.agora_ms();
+        return passa(
+            cors,
+            200,
+            contexto(repo, &empresa_id, agora, &ctx.cfg.fuso).await?,
+        );
     }
     // PATCH /empresas/:id/modulos { reservas?, conhecimento? }: liga ou desliga recursos (os dados são mantidos)
     if recurso == "modulos" && m == "PATCH" {
@@ -1656,6 +1687,7 @@ async fn rotear<R: Repositorio>(
             chave: Some(chave),
             nome_cliente: b.get("nomeCliente").cloned(),
             contato: b.get("contato").cloned(),
+            observacao: b.get("observacao").cloned(),
         };
         let det = reservar_detalhado(repo, &pedido).await?;
         if let Some(c) = &det.criada {

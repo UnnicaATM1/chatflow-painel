@@ -5,13 +5,13 @@ export const DURACAO_MIN = 90;
 
 // A semente pode vir de uma exportação com IDs numéricos. Só carrega os dados da
 // reserva: UUID e código são emitidos pelo repositório que recebe a semente.
-export function prepararReservaSemeada({ mesaId, ambiente, data, horario, pessoas, status, nomeCliente, contato }, ambientes) {
+export function prepararReservaSemeada({ mesaId, ambiente, data, horario, pessoas, status, nomeCliente, contato, observacao }, ambientes) {
   const alvo = ambientes.find((a) => (!ambiente || a.nome === ambiente) && a.mesas.some((mesa) => mesa.id === mesaId));
   if (!alvo || !Number.isInteger(pessoas) || pessoas < 1) throw new Error('reserva inválida na semente');
   if (status !== undefined && status !== 'confirmada' && status !== 'cancelada') throw new Error('status inválido na semente de reservas');
   const inicio = minutosAbsolutos(data, horario);
   return { mesaId, ambiente: alvo.nome, data, horario, pessoas, inicio, fim: inicio + DURACAO_MIN,
-    ...validarCliente({ nomeCliente, contato }), status: status ?? 'confirmada' };
+    ...validarCliente({ nomeCliente, contato, observacao }), status: status ?? 'confirmada' };
 }
 
 function inicio(data, horario) {
@@ -49,13 +49,14 @@ export async function disponibilidade(store, empresaId, data, horario, pessoas, 
 
 function erro(msg, codigo) { return Object.assign(new Error(msg), { codigo }); }
 
-// Dados do cliente que o chat conhece (opcionais): nome até 80 e contato (telefone ou e-mail) até 40 caracteres.
+// Dados do cliente que o chat conhece (opcionais): nome até 80, contato (telefone ou e-mail) até 40 e observação
+// da reserva até 300 caracteres. A observação vira uma linha só (o chat pode mandar quebras de linha).
 export function validarCliente(d) {
   const out = {};
-  for (const [campo, max] of [['nomeCliente', 80], ['contato', 40]]) {
+  for (const [campo, max] of [['nomeCliente', 80], ['contato', 40], ['observacao', 300]]) {
     if (d[campo] === undefined || d[campo] === null) continue;
     if (typeof d[campo] !== 'string') throw erro(`${campo} deve ser texto`, 400);
-    const v = d[campo].trim();
+    const v = campo === 'observacao' ? d[campo].replace(/\s+/g, ' ').trim() : d[campo].trim();
     if ([...v].length > max) throw erro(`${campo} passa do limite de ${max} caracteres`, 400);
     out[campo] = v;
   }
@@ -64,10 +65,10 @@ export function validarCliente(d) {
 
 // Como `reservar`, mas devolve também a reserva criada ({ resposta, criada }): `criada` é null quando a chave de
 // idempotência repetiu uma resposta anterior ou não havia mesa. Usado pelo núcleo para registrar o histórico.
-export async function reservarDetalhado(store, { empresaId, data, horario, pessoas, ambiente, mesaId, chave, nomeCliente, contato }) {
+export async function reservarDetalhado(store, { empresaId, data, horario, pessoas, ambiente, mesaId, chave, nomeCliente, contato, observacao }) {
   const l = await empresa(store, empresaId);
   if (!Number.isInteger(pessoas) || pessoas < 1) throw new Error('pessoas inválido');
-  const cliente = validarCliente({ nomeCliente, contato });
+  const cliente = validarCliente({ nomeCliente, contato, observacao });
 
   if (chave) {
     const antiga = await store.idempotenciaObter(empresaId, chave);
@@ -154,9 +155,10 @@ export async function reativarReserva(store, empresaId, id) {
   return { status: 'confirmada', reserva: publica(res.reserva) };
 }
 
-export function publica({ id, mesaId, ambiente, data, horario, pessoas, status, nomeCliente, contato }) {
+export function publica({ id, mesaId, ambiente, data, horario, pessoas, status, nomeCliente, contato, observacao }) {
   const o = { id, mesaId, ambiente, data, horario, pessoas, status };
   if (nomeCliente) o.nomeCliente = nomeCliente;
   if (contato) o.contato = contato;
+  if (observacao) o.observacao = observacao;
   return o;
 }

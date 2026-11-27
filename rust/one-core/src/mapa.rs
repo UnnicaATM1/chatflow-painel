@@ -40,6 +40,9 @@ pub async fn mapa<R: Repositorio>(
                         if let Some(c) = r.contato.as_ref().filter(|s| !s.is_empty()) {
                             o.insert("contato".into(), c.clone().into());
                         }
+                        if let Some(t) = r.observacao.as_ref().filter(|s| !s.is_empty()) {
+                            o.insert("observacao".into(), t.clone().into());
+                        }
                         Json::Object(o)
                     });
                     let mut mesa = json!({ "id": m.id, "capacidade": m.capacidade });

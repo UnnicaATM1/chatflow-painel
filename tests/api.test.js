@@ -1663,3 +1663,53 @@ test('descrição do local da mesa: valida uma linha até 150 caracteres e apare
   assert.deepStrictEqual(mudancas.sort((a, b) => a[0].length - b[0].length), [['', cheio], [texto, ''], [cheio, texto]].sort((a, b) => a[0].length - b[0].length));
   fechar();
 });
+
+test('observação da reserva: uma linha até 300 caracteres, aparece na lista, no mapa e no histórico, e o desfazer repõe', async () => {
+  const { f, fechar } = await subir();
+  const base = '/empresas/empresa_1';
+  const criar = (body, k) => f(`${base}/reservas`, { token: T.chat, method: 'POST', body: { ...res, nomeCliente: 'Ana', contato: '+55 11 90000-0000', ...body }, headers: { 'Idempotency-Key': k } });
+  assert.strictEqual((await criar({ observacao: 'é'.repeat(301) }, 'obs-longa')).status, 400);
+  assert.strictEqual((await criar({ observacao: 7 }, 'obs-num')).status, 400);
+  const r = await (await criar({ observacao: '  Aniversário da "Bia",\n com 1 criança  ' }, 'obs-1')).json();
+  assert.strictEqual(r.status, 'confirmada');
+  const texto = 'Aniversário da "Bia", com 1 criança';
+  const daLista = async () => (await (await f(`${base}/reservas?data=${res.data}`, { token: T.cliente })).json()).find((x) => x.id === r.reservaId);
+  const doMapa = async () => (await (await f(`${base}/mapa?data=${res.data}&horario=${res.horario}`, { token: T.cliente })).json())[0].mesas[0].reserva;
+  assert.strictEqual((await daLista()).observacao, texto);
+  assert.strictEqual((await doMapa()).observacao, texto);
+
+  const editar = (body) => f(`${base}/reservas/${r.reservaId}`, { token: T.cliente, method: 'PATCH', body });
+  assert.strictEqual((await editar({ observacao: 'x'.repeat(300) })).status, 200);
+  const eventos = async () => (await (await f(`${base}/historico?entidade=reserva&id=${r.reservaId}`, { token: T.cliente })).json());
+  const editada = (await eventos()).find((e) => e.acao === 'editada');
+  assert.strictEqual(editada.antes.observacao, texto);
+  assert.strictEqual((await f(`${base}/historico/${editada.seq}/desfazer`, { token: T.cliente, method: 'POST' })).status, 200);
+  assert.strictEqual((await daLista()).observacao, texto);
+
+  // vazio apaga; desfazer a remoção traz de volta; desfazer a inclusão apaga de novo
+  assert.strictEqual((await editar({ observacao: '' })).status, 200);
+  assert.ok(!('observacao' in (await daLista())));
+  const apagou = (await eventos()).filter((e) => e.acao === 'editada').sort((a, b) => b.seq - a.seq)[0];
+  assert.strictEqual((await f(`${base}/historico/${apagou.seq}/desfazer`, { token: T.cliente, method: 'POST' })).status, 200);
+  assert.strictEqual((await daLista()).observacao, texto);
+
+  // desfazer uma remoção antiga depois de outra observação é recusado (não sobrescreve a mais nova)
+  await editar({ observacao: '' });
+  const removeu = (await eventos()).filter((e) => e.acao === 'editada').sort((a, b) => b.seq - a.seq)[0];
+  await editar({ observacao: 'mais nova' });
+  assert.strictEqual((await f(`${base}/historico/${removeu.seq}/desfazer`, { token: T.cliente, method: 'POST' })).status, 409);
+  assert.strictEqual((await daLista()).observacao, 'mais nova');
+  fechar();
+});
+
+test('contexto troca {{data_hora_atual}} pela data e hora do fuso do negócio', async () => {
+  const semente = JSON.parse(JSON.stringify(SEMENTE_PADRAO));
+  semente[0].agente.habilidades = 'Hoje é: {{data_hora_atual}}';
+  const { f, fechar } = await subir({ semente });
+  const c = await (await f('/empresas/empresa_1/contexto', { token: T.chat })).json();
+  assert.match(c.agente.habilidades, /^Hoje é: (domingo|segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado), \d{2}\/\d{2}\/\d{4} \(\d{4}-\d{2}-\d{2}\), \d{2}:\d{2}$/);
+  assert.ok(!c.prompt.includes('{{data_hora_atual}}'));
+  const parede = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  assert.ok(c.agente.habilidades.includes(`(${parede})`));
+  fechar();
+});

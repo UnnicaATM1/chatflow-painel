@@ -6,8 +6,8 @@ import { operacoesUsuariosD1 } from './usuarios.js';
 
 const MODULOS = { reservas: true, conhecimento: true };
 const CONFLITO = { ok: false, motivo: 'conflito' };
-const COLUNAS_RESERVA = 'codigo AS id, empresa_id AS empresaId, mesa_id AS mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente AS nomeCliente, contato';
-const COLUNAS_GRAVACAO = 'id, empresa_id, codigo, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente, contato';
+const COLUNAS_RESERVA = 'codigo AS id, empresa_id AS empresaId, mesa_id AS mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente AS nomeCliente, contato, observacao';
+const COLUNAS_GRAVACAO = 'id, empresa_id, codigo, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente, contato, observacao';
 const MESA_EXISTE = `EXISTS (SELECT 1 FROM mesas m JOIN ambientes a ON a.id = m.ambiente_id
   WHERE m.empresa_id = ? AND m.mesa_id = ? AND (? IS NULL OR a.nome = ?))`;
 const SEM_SOBREPOSICAO = `NOT EXISTS (SELECT 1 FROM reservas
@@ -15,9 +15,10 @@ const SEM_SOBREPOSICAO = `NOT EXISTS (SELECT 1 FROM reservas
 
 function lerReserva(linha) {
   if (!linha) return null;
-  const { nomeCliente, contato, ...reserva } = linha;
+  const { nomeCliente, contato, observacao, ...reserva } = linha;
   if (nomeCliente !== null) reserva.nomeCliente = nomeCliente;
   if (contato !== null) reserva.contato = contato;
+  if (observacao != null) reserva.observacao = observacao;
   return reserva;
 }
 
@@ -115,7 +116,7 @@ export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHA
     }
 
     const valoresReserva = (uuid, empresa, codigo, r) => [uuid, empresa, codigo, r.mesaId, r.ambiente, r.data, r.horario,
-      r.pessoas, r.inicio, r.fim, r.status, r.nomeCliente ?? null, r.contato ?? null];
+      r.pessoas, r.inicio, r.fim, r.status, r.nomeCliente ?? null, r.contato ?? null, r.observacao || null];
 
     async function carregarItem({ arquivoChave, ...item }, incluir) {
       if (arquivoChave && incluir) {
@@ -287,7 +288,7 @@ export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHA
           const r = prepararReservaSemeada(semente, ambientes);
           const codigo = await codigoNovo(id, usados);
           usados.add(codigo);
-          gravar(`INSERT INTO reservas (${COLUNAS_GRAVACAO}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          gravar(`INSERT INTO reservas (${COLUNAS_GRAVACAO}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             ...valoresReserva(plat.uuid(), id, codigo, r));
         }
         return { id, nome, agente, ambientes: ambientes.map((a) => ({ nome: a.nome,
@@ -385,7 +386,7 @@ export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHA
           if (!(await mesaLivre(empresaId, dados))) continue;
           const id = await codigoNovo(empresaId);
           const valores = valoresReserva(plat.uuid(), empresaId, id, dados);
-          gravar(`INSERT INTO reservas (${COLUNAS_GRAVACAO}) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          gravar(`INSERT INTO reservas (${COLUNAS_GRAVACAO}) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             WHERE ${MESA_EXISTE} AND ${SEM_SOBREPOSICAO}`,
           ...valores, ...argsMesa(empresaId, mesaId, ambiente), ...argsOcupacao(empresaId, dados));
           conferirMutacao();
@@ -393,7 +394,7 @@ export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHA
           if (chave) idemGravar(empresaId, chave, resposta);
           return { criada: true, resposta, reserva: lerReserva({ id, empresaId, mesaId, ambiente, data: dados.data,
             horario: dados.horario, pessoas: dados.pessoas, inicio: dados.inicio, fim: dados.fim, status: dados.status,
-            nomeCliente: dados.nomeCliente ?? null, contato: dados.contato ?? null }) };
+            nomeCliente: dados.nomeCliente ?? null, contato: dados.contato ?? null, observacao: dados.observacao || null }) };
         }
         return { conflito: true };
       },
@@ -406,13 +407,14 @@ export function criarStoreD1(env, { plat = plataformaWeb(), sink, fuso = env.CHA
         if (!(await mesaLivre(empresaId, nova, id))) return { ...CONFLITO };
         const nome = cliente?.nomeCliente === '' ? null : nova.nomeCliente ?? null;
         const contato = cliente?.contato === '' ? null : nova.contato ?? null;
+        const observacao = cliente?.observacao === '' ? null : nova.observacao ?? null;
         gravar(`UPDATE reservas SET mesa_id = ?, ambiente = ?, data = ?, horario = ?, pessoas = ?,
-          inicio = ?, fim = ?, nome_cliente = ?, contato = ? WHERE empresa_id = ? AND codigo = ? AND status = 'confirmada'
+          inicio = ?, fim = ?, nome_cliente = ?, contato = ?, observacao = ? WHERE empresa_id = ? AND codigo = ? AND status = 'confirmada'
           AND ${MESA_EXISTE} AND ${SEM_SOBREPOSICAO}`, nova.mesaId, nova.ambiente, nova.data, nova.horario, nova.pessoas,
-        nova.inicio, nova.fim, nome, contato, empresaId, id, ...argsMesa(empresaId, nova.mesaId, nova.ambiente),
+        nova.inicio, nova.fim, nome, contato, observacao, empresaId, id, ...argsMesa(empresaId, nova.mesaId, nova.ambiente),
         ...argsOcupacao(empresaId, nova, id));
         conferirMutacao();
-        return { ok: true, reserva: lerReserva({ ...nova, nomeCliente: nome, contato }) };
+        return { ok: true, reserva: lerReserva({ ...nova, nomeCliente: nome, contato, observacao }) };
       },
       async reservaCancelar(empresa, id) {
         const atual = await obterReserva(empresa, id);

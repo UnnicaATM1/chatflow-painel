@@ -102,15 +102,16 @@
     var sm = useState(''), msg = sm[0], setMsg = sm[1];
     var sn = useState(''), nomeCli = sn[0], setNomeCli = sn[1];
     var sc2 = useState(''), contatoCli = sc2[0], setContatoCli = sc2[1];
+    var so = useState(''), obsCli = so[0], setObsCli = so[1];
     function consultar() {
       setMsg(''); setDisp(null);
       api(p.token, 'GET', '/empresas/' + encodeURIComponent(p.empresa) + '/disponibilidade?data=' + data + '&horario=' + hora + '&pessoas=' + Number(pessoas))
         .then(setDisp).catch(function (e) { setMsg(e.message); });
     }
     function reservar(mesaId) {
-      api(p.token, 'POST', '/empresas/' + encodeURIComponent(p.empresa) + '/reservas', { data: data, horario: hora, pessoas: Number(pessoas), mesaId: mesaId, chave: chaveNova(), nomeCliente: nomeCli.trim() || undefined, contato: contatoCli.trim() || undefined })
+      api(p.token, 'POST', '/empresas/' + encodeURIComponent(p.empresa) + '/reservas', { data: data, horario: hora, pessoas: Number(pessoas), mesaId: mesaId, chave: chaveNova(), nomeCliente: nomeCli.trim() || undefined, contato: contatoCli.trim() || undefined, observacao: obsCli.trim() || undefined })
         .then(function (r) {
-          if (r.status === 'confirmada') { setMsg('Reserva confirmada na mesa ' + r.mesa + '.'); setDisp(null); p.aoReservar(data); }
+          if (r.status === 'confirmada') { setMsg('Reserva confirmada na mesa ' + r.mesa + '.'); setDisp(null); setObsCli(''); p.aoReservar(data); }
           else { setMsg('Mesa já reservada. Disponibilidade atualizada.'); setDisp({ ambientes: r.disponibilidade }); }
         }).catch(function (e) { setMsg(e.message); });
     }
@@ -124,7 +125,8 @@
         h(K.Button, { onClick: consultar }, 'Ver disponibilidade')),
       h('div', { className: 'k1-row' },
         h('input', { type: 'text', value: nomeCli, maxLength: 80, placeholder: 'Nome do cliente (opcional)', 'aria-label': 'Nome do cliente', style: { minWidth: 220 }, onChange: function (e) { setNomeCli(e.target.value); } }),
-        h('input', { type: 'text', value: contatoCli, maxLength: 40, placeholder: 'Telefone ou e-mail (opcional)', 'aria-label': 'Contato do cliente', style: { minWidth: 220 }, onChange: function (e) { setContatoCli(e.target.value); } })),
+        h('input', { type: 'text', value: contatoCli, maxLength: 40, placeholder: 'Telefone ou e-mail (opcional)', 'aria-label': 'Contato do cliente', style: { minWidth: 220 }, onChange: function (e) { setContatoCli(e.target.value); } }),
+        h('input', { type: 'text', value: obsCli, maxLength: 300, placeholder: 'Observação (opcional): aniversário, criança, acessibilidade…', 'aria-label': 'Observação da reserva', style: { flex: '1 1 320px', minWidth: 0 }, onChange: function (e) { setObsCli(e.target.value); } })),
       msg && h('div', { role: 'status', className: /confirmada/.test(msg) ? 'rotulo' : 'erro' }, msg),
       disp && total === 0 && h(K.EmptyState, null, 'Sem mesa livre neste horário para ' + pessoas + ' pessoas.'),
       disp && total > 0 && disp.ambientes.map(function (a) {
@@ -142,6 +144,7 @@
     var sf = useState({ data: r.data, horario: r.horario, pessoas: String(r.pessoas), mesaId: r.mesaId }), f = sf[0], setF = sf[1];
     var sd = useState(null), disp = sd[0], setDisp = sd[1];
     var sm = useState(''), msg = sm[0], setMsg = sm[1];
+    var so = useState(r.observacao || ''), obs = so[0], setObs = so[1];
     var ativa = r.status === 'confirmada';
     var sx = useState(false), confExcluir = sx[0], setConfExcluir = sx[1];
     function excluirDefinitivo() {
@@ -171,7 +174,8 @@
           r.pessoas,
           ativa && h(K.Button, { variant: 'secondary', 'aria-label': 'Adicionar uma pessoa', onClick: function () { enviar('PATCH', { pessoas: r.pessoas + 1 }); } }, '+'))),
         h('td', null, r.ambiente), h('td', { className: 'mono' }, r.mesaId),
-        h('td', null, r.nomeCliente ? h('span', null, r.nomeCliente, r.contato && h('span', { className: 'rotulo', style: { display: 'block' } }, r.contato)) : h('span', { style: { color: 'var(--ink-muted)' } }, '—')),
+        h('td', null, r.nomeCliente ? h('span', null, r.nomeCliente, r.contato && h('span', { className: 'rotulo', style: { display: 'block' } }, r.contato)) : h('span', { style: { color: 'var(--ink-muted)' } }, '—'),
+          r.observacao && h('span', { className: 'reserva-obs' }, 'Obs.: ' + r.observacao)),
         h('td', null, h('span', { className: 'k1-pill k1-pill-' + (ativa ? 'concluida' : 'pendente') }, ativa ? 'Confirmada' : 'Cancelada')),
         h('td', null, h('span', { className: 'k1-row', style: { gap: 4 } },
           ativa && h(K.Button, { variant: 'secondary', onClick: function () { setAberto(!aberto); if (!aberto) consultar({}); } }, 'Editar'),
@@ -194,9 +198,10 @@
               return h('button', { key: m.id, type: 'button', className: 'mesa', 'data-situacao': 'livre', 'aria-pressed': String(f.mesaId === m.id), onClick: function () { setF(Object.assign({}, f, { mesaId: m.id })); } }, h('b', null, m.id), m.capacidade + ' lugares', m.descricao && h('span', { className: 'mesa-local' }, m.descricao));
             })));
         }),
+        h('input', { type: 'text', value: obs, maxLength: 300, placeholder: 'Observação da reserva', 'aria-label': 'Observação da reserva #' + r.id, style: { width: '100%', boxSizing: 'border-box' }, onChange: function (e) { setObs(e.target.value); } }),
         msg && h('div', { className: 'erro', role: 'alert' }, msg),
         h('div', { className: 'k1-row' },
-          h(K.Button, { onClick: function () { enviar('PATCH', { data: f.data, horario: f.horario, pessoas: Number(f.pessoas), mesaId: f.mesaId }); } }, 'Salvar alterações'),
+          h(K.Button, { onClick: function () { enviar('PATCH', { data: f.data, horario: f.horario, pessoas: Number(f.pessoas), mesaId: f.mesaId, observacao: obs }); } }, 'Salvar alterações'),
           h(K.Button, { variant: 'ghost', onClick: function () { setAberto(false); setMsg(''); } }, 'Fechar'))))));
   }
 
@@ -216,7 +221,7 @@
       lista && lista.length > 0 && h('table', null,
         h('thead', null, h('tr', null, ['Horário', 'Pessoas', 'Ambiente', 'Mesa', 'Cliente', 'Situação', 'Ações'].map(function (c) { return h('th', { key: c }, c); }))),
         h('tbody', null, lista.slice().sort(function (a, b) { return a.horario < b.horario ? -1 : 1; }).map(function (r) {
-          return h(LinhaReserva, { key: r.id + r.horario + r.pessoas + r.mesaId + r.status, r: r, token: p.token, empresa: p.empresa, recarregar: function () { setRecarga(recarga + 1); } });
+          return h(LinhaReserva, { key: r.id + r.horario + r.pessoas + r.mesaId + r.status + (r.observacao || ''), r: r, token: p.token, empresa: p.empresa, recarregar: function () { setRecarga(recarga + 1); } });
         }))));
   }
 
@@ -259,7 +264,8 @@
               h('div', null, 'Horário: ', h('b', { className: 'mono' }, mesa.reserva.horario)), h('div', null, 'Pessoas: ', h('b', { className: 'mono' }, mesa.reserva.pessoas)),
               h('div', null, 'Situação: ', h('b', null, mesa.reserva.status)),
               mesa.reserva.nomeCliente && h('div', null, 'Cliente: ', h('b', null, mesa.reserva.nomeCliente)),
-              mesa.reserva.contato && h('div', null, 'Contato: ', h('b', { className: 'mono' }, mesa.reserva.contato)))
+              mesa.reserva.contato && h('div', null, 'Contato: ', h('b', { className: 'mono' }, mesa.reserva.contato)),
+              mesa.reserva.observacao && h('div', { style: { overflowWrap: 'anywhere' } }, 'Observação: ', h('b', null, mesa.reserva.observacao)))
             : h('div', null, 'Livre neste horário.'))));
   }
 
@@ -880,8 +886,8 @@
         lista.push({
           name: 'one_reservar', method: 'POST', url: o + '/empresas/' + id + '/reservas', headers: Object.assign({ 'Content-Type': 'application/json', 'Idempotency-Key': '{{uuid_da_reserva}}' }, auth),
           description: "Registra a reserva. Só confirme ao cliente se a resposta tiver status 'confirmada'. Reenvie a MESMA Idempotency-Key se precisar repetir a chamada.",
-          parameters: { type: 'object', properties: { data: { type: 'string' }, horario: { type: 'string' }, pessoas: { type: 'integer', minimum: 1 }, mesaId: { type: 'string', description: 'opcional' }, ambiente: { type: 'string', description: 'opcional' }, nomeCliente: { type: 'string', description: 'nome do cliente (envie sempre que tiver)' }, contato: { type: 'string', description: 'telefone ou e-mail do cliente (envie sempre que tiver)' } }, required: ['data', 'horario', 'pessoas'] },
-          body: { data: '{{data}}', horario: '{{horario}}', pessoas: '{{pessoas}}', mesaId: '{{mesaId}}', ambiente: '{{ambiente}}', nomeCliente: '{{contato.nome}}', contato: '{{contato.telefone}}' },
+          parameters: { type: 'object', properties: { data: { type: 'string' }, horario: { type: 'string' }, pessoas: { type: 'integer', minimum: 1 }, mesaId: { type: 'string', description: 'opcional' }, ambiente: { type: 'string', description: 'opcional' }, nomeCliente: { type: 'string', description: 'nome do cliente (envie sempre que tiver)' }, contato: { type: 'string', description: 'telefone ou e-mail do cliente (envie sempre que tiver)' }, observacao: { type: 'string', description: 'opcional, até 300 caracteres: só o que o cliente disse e importa para a reserva' } }, required: ['data', 'horario', 'pessoas'] },
+          body: { data: '{{data}}', horario: '{{horario}}', pessoas: '{{pessoas}}', mesaId: '{{mesaId}}', ambiente: '{{ambiente}}', nomeCliente: '{{contato.nome}}', contato: '{{contato.telefone}}', observacao: '{{observacao}}' },
         });
       }
       return lista;

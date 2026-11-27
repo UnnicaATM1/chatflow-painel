@@ -18,7 +18,8 @@
       "mesaId": { "type": "string", "description": "Código da mesa escolhida entre as livres (opcional)" },
       "ambiente": { "type": "string", "description": "Ambiente preferido (opcional)" },
       "nomeCliente": { "type": "string", "description": "Nome do cliente, até 80 caracteres (opcional, mas envie sempre que tiver)" },
-      "contato": { "type": "string", "description": "Telefone ou e-mail do cliente, até 40 caracteres (opcional, mas envie sempre que tiver)" }
+      "contato": { "type": "string", "description": "Telefone ou e-mail do cliente, até 40 caracteres (opcional, mas envie sempre que tiver)" },
+      "observacao": { "type": "string", "description": "O que o cliente disse e importa para a reserva, em uma linha, até 300 caracteres (opcional). Não invente." }
     },
     "required": ["data", "horario", "pessoas"]
   },
@@ -29,7 +30,8 @@
     "mesaId": "{{mesaId}}",
     "ambiente": "{{ambiente}}",
     "nomeCliente": "{{contato.nome}}",
-    "contato": "{{contato.telefone}}"
+    "contato": "{{contato.telefone}}",
+    "observacao": "{{observacao}}"
   },
   "response": {
     "status": "'confirmada' (HTTP 201) ou 'indisponivel' (HTTP 200)",

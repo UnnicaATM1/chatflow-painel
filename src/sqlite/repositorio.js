@@ -12,7 +12,7 @@ import { operacoesUsuariosSqlite } from './usuarios.js';
 
 const MODULOS_PADRAO = { reservas: true, conhecimento: true };
 const CONFLITO = { ok: false, motivo: 'conflito' };
-const COLUNAS_RESERVA = 'codigo AS id, empresa_id AS empresaId, mesa_id AS mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente AS nomeCliente, contato';
+const COLUNAS_RESERVA = 'codigo AS id, empresa_id AS empresaId, mesa_id AS mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente AS nomeCliente, contato, observacao';
 
 // O DatabaseSync pode bloquear esperando outra conexão. A fila compartilhada permite que
 // uma transação assíncrona termine antes de outra conexão local tentar obter o mesmo lock.
@@ -28,9 +28,10 @@ function enfileirar(chave, executar) {
 
 function lerReserva(linha) {
   if (!linha) return null;
-  const { nomeCliente, contato, ...reserva } = linha;
+  const { nomeCliente, contato, observacao, ...reserva } = linha;
   if (nomeCliente !== null) reserva.nomeCliente = nomeCliente;
   if (contato !== null) reserva.contato = contato;
+  if (observacao != null) reserva.observacao = observacao;
   return reserva;
 }
 
@@ -210,12 +211,12 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
   }
 
   function inserirReserva(empresaId, reserva) {
-    const { mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nomeCliente, contato } = reserva;
+    const { mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nomeCliente, contato, observacao } = reserva;
     const codigo = gerarCodigoReserva(p, (c) => Boolean(obter('SELECT 1 FROM reservas_codigos WHERE empresa_id = ? AND codigo = ?', empresaId, c)));
     gravar(`INSERT INTO reservas
-      (id, empresa_id, codigo, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente, contato)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    p.uuid(), empresaId, codigo, mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nomeCliente ?? null, contato ?? null);
+      (id, empresa_id, codigo, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status, nome_cliente, contato, observacao)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    p.uuid(), empresaId, codigo, mesaId, ambiente, data, horario, pessoas, inicio, fim, status, nomeCliente ?? null, contato ?? null, observacao || null);
     return codigo;
   }
 
@@ -428,9 +429,10 @@ export function criarRepositorioSqlite({ plat, sink, caminho = ':memory:', idemp
         const nova = { ...atual, ...dados, ...cliente };
         if (!mesaExiste(empresaId, nova.mesaId, nova.ambiente) || ocupada(empresaId, nova.mesaId, nova.inicio, nova.fim, id)) return { ...CONFLITO };
         gravar(`UPDATE reservas SET mesa_id = ?, ambiente = ?, data = ?, horario = ?, pessoas = ?,
-          inicio = ?, fim = ?, nome_cliente = ?, contato = ? WHERE empresa_id = ? AND codigo = ?`,
+          inicio = ?, fim = ?, nome_cliente = ?, contato = ?, observacao = ? WHERE empresa_id = ? AND codigo = ?`,
         nova.mesaId, nova.ambiente, nova.data, nova.horario, nova.pessoas, nova.inicio, nova.fim,
         cliente?.nomeCliente === '' ? null : nova.nomeCliente ?? null, cliente?.contato === '' ? null : nova.contato ?? null,
+        cliente?.observacao === '' ? null : nova.observacao ?? null,
         empresaId, id);
         return { ok: true, reserva: obterReserva(empresaId, id) };
       });

@@ -37,6 +37,31 @@ pub fn agora_minutos(ms: i64, fuso: &str) -> Res<i64> {
         .div_euclid(60))
 }
 
+/// Data e hora de agora por extenso, no fuso do negócio (espelha `textoDeAgora` de `src/contexto.js`).
+pub fn texto_de_agora(ms: i64, fuso: &str) -> String {
+    use chrono::{Datelike, Timelike};
+    const DIAS: [&str; 7] = [
+        "domingo",
+        "segunda-feira",
+        "terça-feira",
+        "quarta-feira",
+        "quinta-feira",
+        "sexta-feira",
+        "sábado",
+    ];
+    let zona = zona(fuso).unwrap_or(chrono_tz::America::Sao_Paulo);
+    let t = chrono::DateTime::from_timestamp_millis(ms)
+        .unwrap_or_default()
+        .with_timezone(&zona);
+    let semana = DIAS[t.weekday().num_days_from_sunday() as usize];
+    let (a, m, d) = (t.year(), t.month(), t.day());
+    format!(
+        "{semana}, {d:02}/{m:02}/{a:04} ({a:04}-{m:02}-{d:02}), {:02}:{:02}",
+        t.hour(),
+        t.minute()
+    )
+}
+
 fn bissexto(a: i64) -> bool {
     (a % 4 == 0 && a % 100 != 0) || a % 400 == 0
 }

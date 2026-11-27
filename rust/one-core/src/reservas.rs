@@ -85,21 +85,39 @@ pub async fn disponibilidade<R: Repositorio>(
     Ok(json!({ "ambientes": ambientes }))
 }
 
-/// Dados do cliente que o chat conhece (opcionais): nome até 80 e contato até 40 caracteres.
-/// Devolve `(nomeCliente, contato)`; `None` quando o campo não veio (ou veio nulo).
+/// Dados do cliente que o chat conhece (opcionais).
+#[derive(Debug, Default, Clone)]
+pub struct Cliente {
+    pub nome: Option<String>,
+    pub contato: Option<String>,
+    pub observacao: Option<String>,
+}
+
+/// Nome até 80, contato até 40 e observação até 300 caracteres (a observação vira uma linha só).
+/// Cada campo fica `None` quando não veio (ou veio nulo).
 pub fn validar_cliente(
     nome: Option<&Json>,
     contato: Option<&Json>,
-) -> Res<(Option<String>, Option<String>)> {
-    let mut saida = [None, None];
-    for (i, (campo, max, v)) in [("nomeCliente", 80, nome), ("contato", 40, contato)]
-        .into_iter()
-        .enumerate()
+    observacao: Option<&Json>,
+) -> Res<Cliente> {
+    let mut saida = [None, None, None];
+    for (i, (campo, max, v)) in [
+        ("nomeCliente", 80, nome),
+        ("contato", 40, contato),
+        ("observacao", 300, observacao),
+    ]
+    .into_iter()
+    .enumerate()
     {
         match v {
             None | Some(Json::Null) => {}
             Some(Json::String(s)) => {
-                let t = s.trim();
+                let limpo = if campo == "observacao" {
+                    s.split_whitespace().collect::<Vec<_>>().join(" ")
+                } else {
+                    s.trim().to_string()
+                };
+                let t = limpo.as_str();
                 if tam(t) > max {
                     return erro(400, format!("{campo} passa do limite de {max} caracteres"));
                 }
@@ -108,8 +126,12 @@ pub fn validar_cliente(
             Some(_) => return erro(400, format!("{campo} deve ser texto")),
         }
     }
-    let [n, c] = saida;
-    Ok((n, c))
+    let [nome, contato, observacao] = saida;
+    Ok(Cliente {
+        nome,
+        contato,
+        observacao,
+    })
 }
 
 /// Entrada de `reservar`. Os campos `Json` mantêm o tipo que veio no corpo (o JavaScript os valida em tempo de execução).
@@ -124,6 +146,7 @@ pub struct PedidoReserva {
     pub chave: Option<String>,
     pub nome_cliente: Option<Json>,
     pub contato: Option<Json>,
+    pub observacao: Option<Json>,
 }
 
 /// Valor "truthy" de texto usado como filtro (`if (ambiente)`); tipos que não são texto nunca casam com nada.
@@ -152,6 +175,9 @@ pub fn publica(r: &Reserva) -> Json {
     if let Some(c) = r.contato.as_ref().filter(|s| !s.is_empty()) {
         o.insert("contato".into(), c.clone().into());
     }
+    if let Some(t) = r.observacao.as_ref().filter(|s| !s.is_empty()) {
+        o.insert("observacao".into(), t.clone().into());
+    }
     Json::Object(o)
 }
 
@@ -167,7 +193,11 @@ pub async fn reservar_detalhado<R: Repositorio>(repo: &R, p: &PedidoReserva) -> 
     let Some(pessoas) = inteiro(p.pessoas.as_ref()).filter(|n| *n >= 1) else {
         return erro(400, "pessoas inválido");
     };
-    let (nome_cliente, contato) = validar_cliente(p.nome_cliente.as_ref(), p.contato.as_ref())?;
+    let cliente = validar_cliente(
+        p.nome_cliente.as_ref(),
+        p.contato.as_ref(),
+        p.observacao.as_ref(),
+    )?;
 
     let chave = p.chave.as_deref().filter(|c| !c.is_empty());
     if let Some(c) = chave
@@ -208,8 +238,9 @@ pub async fn reservar_detalhado<R: Repositorio>(repo: &R, p: &PedidoReserva) -> 
             inicio: ini,
             fim: ini + DURACAO_MIN,
             status: "confirmada".into(),
-            nome_cliente,
-            contato,
+            nome_cliente: cliente.nome,
+            contato: cliente.contato,
+            observacao: cliente.observacao.filter(|o| !o.is_empty()),
         };
         let candidatas = ok
             .iter()
@@ -309,6 +340,7 @@ pub struct Mudancas {
     pub mesa_id: Option<Json>,
     pub nome_cliente: Option<Json>,
     pub contato: Option<Json>,
+    pub observacao: Option<Json>,
 }
 
 /// `mudanca || atual` com a coerção de texto do JavaScript.
@@ -351,7 +383,11 @@ pub async fn editar_reserva<R: Repositorio>(
         return indisponivel(repo, empresa_id, &data, &horario, pessoas, &r.id).await;
     };
     let ini = minutos_absolutos(&data, &horario)?;
-    let (nome_cliente, contato) = validar_cliente(m.nome_cliente.as_ref(), m.contato.as_ref())?;
+    let cliente = validar_cliente(
+        m.nome_cliente.as_ref(),
+        m.contato.as_ref(),
+        m.observacao.as_ref(),
+    )?;
     let dados = Reserva {
         pessoas,
         data: data.clone(),
@@ -363,7 +399,14 @@ pub async fn editar_reserva<R: Repositorio>(
         ..r.clone()
     };
     match repo
-        .reserva_editar(empresa_id, &r.id, dados, nome_cliente, contato)
+        .reserva_editar(
+            empresa_id,
+            &r.id,
+            dados,
+            cliente.nome,
+            cliente.contato,
+            cliente.observacao,
+        )
         .await
     {
         Muda::Ok(nova) => Ok(json!({ "status": "atualizada", "reserva": publica(&nova) })),

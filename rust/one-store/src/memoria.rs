@@ -650,6 +650,7 @@ impl Repositorio for Memoria {
         dados: Reserva,
         nome_cliente: Option<String>,
         contato: Option<String>,
+        observacao: Option<String>,
     ) -> Muda {
         let mut est = self.est();
         let Some(mesa_id) = dados.mesa_id.as_deref() else {
@@ -679,6 +680,9 @@ impl Repositorio for Memoria {
         }
         if let Some(c) = contato {
             r.contato = if c.is_empty() { None } else { Some(c) };
+        }
+        if let Some(o) = observacao {
+            r.observacao = if o.is_empty() { None } else { Some(o) };
         }
         Muda::Ok(r.clone())
     }
@@ -1177,6 +1181,7 @@ mod testes {
             status: "confirmada".into(),
             nome_cliente: None,
             contato: None,
+            observacao: None,
         }
     }
 

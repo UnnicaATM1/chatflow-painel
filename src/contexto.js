@@ -5,6 +5,17 @@
 // Sem travessões nos textos (regra do design system para textos de agente).
 import { lerConfig, empresa } from './agentes.js';
 import * as conhecimento from './conhecimento.js';
+import { parede } from './tempo.js';
+
+// O texto do agente pode usar {{data_hora_atual}}; a troca usa o relógio do fuso do negócio.
+const MARCADOR_AGORA = '{{data_hora_atual}}';
+const DIAS = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+
+function textoDeAgora(instante, fuso) {
+  const { data, horario } = parede(instante, fuso);
+  const [a, m, d] = data.split('-').map(Number);
+  return `${DIAS[new Date(Date.UTC(a, m - 1, d)).getUTCDay()]}, ${data.slice(8)}/${data.slice(5, 7)}/${data.slice(0, 4)} (${data}), ${horario}`;
+}
 
 // Recursos que a empresa usa e os endereços que o sistema de conversa pode chamar.
 function recursosDe(e) {
@@ -67,15 +78,17 @@ function montarPrompt(e, agente, itens) {
 
   if (e.modulos.reservas) {
     p += `\n## Reservas de mesa
-Para reservar: 1) pergunte data, horário, número de pessoas e o ambiente preferido; 2) consulte a disponibilidade antes de oferecer qualquer horário; 3) ofereça ao cliente apenas as mesas livres devolvidas; 4) quando o cliente escolher, registre a reserva; 5) envie também o nome e o contato do cliente quando você os tiver (nomeCliente e contato); 6) só confirme ao cliente depois que o sistema responder "confirmada". Se a resposta for "indisponivel", ofereça as alternativas devolvidas e não prometa mesa.
+Para reservar: 1) pergunte data, horário, número de pessoas e o ambiente preferido; 2) consulte a disponibilidade antes de oferecer qualquer horário; 3) ofereça ao cliente apenas as mesas livres devolvidas; 4) quando o cliente escolher, registre a reserva; 5) antes de registrar, confirme com o cliente o nome e o telefone da reserva e envie em nomeCliente e contato; se o cliente avisou algo importante (aniversário, criança, acessibilidade, alergia), envie em observacao, sem inventar; 6) só confirme ao cliente depois que o sistema responder "confirmada". Se a resposta for "indisponivel", ofereça as alternativas devolvidas e não prometa mesa.
 `;
   }
   return p.trim() + '\n';
 }
 
-async function contexto(store, empresaId) {
+async function contexto(store, empresaId, { agora, fuso } = {}) {
   const e = await empresa(store, empresaId);
-  const agente = await lerConfig(store, empresaId);
+  const config = await lerConfig(store, empresaId);
+  const momento = textoDeAgora(agora ?? Date.now(), fuso);
+  const agente = Object.fromEntries(Object.entries(config).map(([k, v]) => [k, typeof v === 'string' ? v.split(MARCADOR_AGORA).join(momento) : v]));
   const itens = e.modulos.conhecimento ? await conhecimento.listarPublico(store, empresaId) : [];
   const r = recursosDe(e);
   return {

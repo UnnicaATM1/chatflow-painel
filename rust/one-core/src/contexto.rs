@@ -142,14 +142,28 @@ pub fn montar_prompt(e: &Empresa, agente: &Json, itens: &[Json]) -> String {
     }
 
     if e.modulos.reservas {
-        p.push_str("\n## Reservas de mesa\nPara reservar: 1) pergunte data, horário, número de pessoas e o ambiente preferido; 2) consulte a disponibilidade antes de oferecer qualquer horário; 3) ofereça ao cliente apenas as mesas livres devolvidas; 4) quando o cliente escolher, registre a reserva; 5) envie também o nome e o contato do cliente quando você os tiver (nomeCliente e contato); 6) só confirme ao cliente depois que o sistema responder \"confirmada\". Se a resposta for \"indisponivel\", ofereça as alternativas devolvidas e não prometa mesa.\n");
+        p.push_str("\n## Reservas de mesa\nPara reservar: 1) pergunte data, horário, número de pessoas e o ambiente preferido; 2) consulte a disponibilidade antes de oferecer qualquer horário; 3) ofereça ao cliente apenas as mesas livres devolvidas; 4) quando o cliente escolher, registre a reserva; 5) antes de registrar, confirme com o cliente o nome e o telefone da reserva e envie em nomeCliente e contato; se o cliente avisou algo importante (aniversário, criança, acessibilidade, alergia), envie em observacao, sem inventar; 6) só confirme ao cliente depois que o sistema responder \"confirmada\". Se a resposta for \"indisponivel\", ofereça as alternativas devolvidas e não prometa mesa.\n");
     }
     format!("{}\n", p.trim())
 }
 
-pub async fn contexto<R: Repositorio>(repo: &R, empresa_id: &str) -> Res<Json> {
+pub async fn contexto<R: Repositorio>(
+    repo: &R,
+    empresa_id: &str,
+    agora_ms: i64,
+    fuso: &str,
+) -> Res<Json> {
     let e = empresa(repo, empresa_id).await?;
-    let agente = ler_config(repo, empresa_id).await?;
+    let mut agente = ler_config(repo, empresa_id).await?;
+    // o texto do agente pode usar {{data_hora_atual}}
+    let momento = crate::tempo::texto_de_agora(agora_ms, fuso);
+    if let Some(campos) = agente.as_object_mut() {
+        for v in campos.values_mut() {
+            if let Json::String(s) = v {
+                *s = s.replace("{{data_hora_atual}}", &momento);
+            }
+        }
+    }
     let itens = if e.modulos.conhecimento {
         listar_publico(repo, empresa_id).await?
     } else {

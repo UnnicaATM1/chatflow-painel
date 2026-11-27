@@ -157,7 +157,8 @@ async function desfazer(store, lid, seq, ator) {
   const atual = await store.reservaObter(lid, ev.entidadeId);
   if (!atual) throw Object.assign(new Error('reserva inexistente'), { codigo: 404 });
   const pub = publica(atual);
-  for (const k of Object.keys(ev.depois)) {
+  // inclui campos que a mudança apagou (só aparecem em `antes`): se voltaram a ter valor, há mudança posterior
+  for (const k of new Set([...Object.keys(ev.depois), ...Object.keys(ev.antes || {})])) {
     if (JSON.stringify(pub[k]) !== JSON.stringify(ev.depois[k])) {
       throw Object.assign(new Error('há mudanças posteriores nesta reserva; desfaça na ordem inversa'), { codigo: 409 });
     }
@@ -166,7 +167,12 @@ async function desfazer(store, lid, seq, ator) {
     if (ev.acao === 'criada') return cancelarReserva(store, lid, ev.entidadeId);
     if (ev.antes.status === 'cancelada') return cancelarReserva(store, lid, ev.entidadeId);
     if (ev.antes.status === 'confirmada') return reativarReserva(store, lid, ev.entidadeId);
-    return editarReserva(store, lid, ev.entidadeId, { pessoas: ev.antes.pessoas, data: ev.antes.data, horario: ev.antes.horario, mesaId: ev.antes.mesaId });
+    const volta = { pessoas: ev.antes.pessoas, data: ev.antes.data, horario: ev.antes.horario, mesaId: ev.antes.mesaId };
+    // dados do cliente que a edição mudou voltam ao valor anterior ('' apaga o que não existia)
+    for (const k of ['nomeCliente', 'contato', 'observacao']) {
+      if (k in (ev.antes || {}) || k in (ev.depois || {})) volta[k] = ev.antes?.[k] ?? '';
+    }
+    return editarReserva(store, lid, ev.entidadeId, volta);
   };
   return mudarReserva(store, lid, ev.entidadeId, op, ator, { acao: 'desfeita', refSeq: seq });
 }
@@ -469,7 +475,7 @@ export async function tratar(req, ctx) {
       const b = await lerCorpo(req);
       const r = await mudarReserva(store, lid, rid, (tx) => (b.status === 'cancelada' ? cancelarReserva(tx, lid, rid)
         : b.status === 'confirmada' ? reativarReserva(tx, lid, rid)
-          : editarReserva(tx, lid, rid, { pessoas: b.pessoas, data: b.data, horario: b.horario, mesaId: b.mesaId, nomeCliente: b.nomeCliente, contato: b.contato })), ator);
+          : editarReserva(tx, lid, rid, { pessoas: b.pessoas, data: b.data, horario: b.horario, mesaId: b.mesaId, nomeCliente: b.nomeCliente, contato: b.contato, observacao: b.observacao })), ator);
       return resp(r.status === 'indisponivel' ? 409 : 200, r);
     }
     // POST /empresas/:id/historico/:seq/desfazer
@@ -537,7 +543,7 @@ export async function tratar(req, ctx) {
     }
     // GET /empresas/:id/contexto: tudo o que o agente precisa em uma chamada (config, conhecimento, recursos e prompt pronto)
     if (recurso === 'contexto' && req.metodo === 'GET') {
-      return resp(200, await contexto(store, empresaId));
+      return resp(200, await contexto(store, empresaId, { agora: ctx.agora(), fuso: ctx.fuso }));
     }
     // PATCH /empresas/:id/modulos { reservas?, conhecimento? }: liga ou desliga recursos (os dados são mantidos)
     if (recurso === 'modulos' && req.metodo === 'PATCH') {
@@ -581,7 +587,7 @@ export async function tratar(req, ctx) {
         return resp(400, { erro: 'data (AAAA-MM-DD) e horario (HH:MM) obrigatórios' });
       }
       const r = await criarReservaComHistorico(store, { empresaId, data: b.data, horario: b.horario, pessoas: b.pessoas,
-        ambiente: b.ambiente, mesaId: b.mesaId, chave: String(chave), nomeCliente: b.nomeCliente, contato: b.contato }, quem(req, papel, auth));
+        ambiente: b.ambiente, mesaId: b.mesaId, chave: String(chave), nomeCliente: b.nomeCliente, contato: b.contato, observacao: b.observacao }, quem(req, papel, auth));
       return resp(r.status === 'confirmada' ? 201 : 200, r);
     }
     // Consulta do agente antes de reservar: mesas livres por ambiente

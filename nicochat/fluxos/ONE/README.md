@@ -71,14 +71,50 @@ Padrão a repetir em cada canal (um canal por empresa):
    próxima mensagem e consultam de novo. Confira as ligações na versão publicada.
 5. Nos textos do agente, use o ID da variável, como `{{<id de one_agente> :: $.nome}}`. Cada canal tem IDs
    próprios. No teste, o nome da variável não foi substituído quando o agente foi editado pelo MCP.
-6. Regras do agente: apresentar-se só na primeira resposta; nunca enviar marcador sem valor; só falar de
-   mesa quando `one_reservas` for `true`.
+6. Regras do agente: apresentar-se só na primeira resposta; nunca enviar marcador sem valor. Reservas:
+   `one_reservas` chega como `1` (não como a palavra `true`); a regra aceita `1` ou `true` e só bloqueia mesas
+   quando o valor está vazio, `0` ou `false`.
+7. Descrição das mesas (`descricao` vem na disponibilidade):
+   - no workflow de disponibilidade, o texto do "Resultado da função AI" manda usar a `descricao`;
+   - o `function_prompt` de `check_table_availability` e as habilidades mandam citar a descrição, indicar até 3
+     mesas conforme a preferência e não inventar característica; a restrição 8 aceita a descrição como fonte;
+   - o campo "information" do agente inclui a última consulta (`{{<id de one_disp> :: $}}`, com data, horário e
+     pessoas), para a descrição valer também nas mensagens seguintes. Sem isso, o agente respondeu que ia
+     confirmar com a equipe um item que estava na descrição.
+8. Bloco do agente com `idle_minutes: 1440`. Com 30, depois de uma pausa o agente padrão do canal assumiu a
+   conversa e descreveu a mesa com características inventadas. Depois do prazo, é preciso enviar `#one` de novo.
 
 O que não funcionou: gravar a resposta inteira (`$`) em uma variável Long JSON e ler com `:: $.caminho`.
 
-Ainda sem prova de ponta a ponta: busca no conhecimento, disponibilidade e reserva.
+Disponibilidade com descrição: provada em sandbox em 2026-11-27 (indicou cabanas perto da piscina pela
+descrição; na mensagem seguinte descreveu outra mesa; disse que a descrição não menciona o que não está nela).
+Ainda sem prova de ponta a ponta: busca no conhecimento e reserva.
+
+## Reserva pela conversa (montada em 2026-11-27)
+
+1. O agente pergunta, uma coisa por vez: data, horário e pessoas; mesa; nome da reserva (o nome do perfil é só
+   sugestão); telefone (usa o do canal se confirmado; no canal web não existe); se há algo que a equipe precise saber.
+2. Envia o resumo e só executa `book_table` depois do "sim".
+3. Parâmetros novos de `book_table`: `customer_name`, `customer_phone`, `notes` (todos obrigatórios; sem
+   observação, `notes` é `SEM_OBS`). Todos os parâmetros das duas funções com `memory: 0`, para não reaproveitar
+   valores de uma conversa anterior.
+4. No workflow, antes do POST, o bloco "Preparar dados da reserva" sorteia um número
+   (`set_value` `rand_num`; `rand_text` gravou o formato literalmente), troca aspas e barras invertidas por
+   caracteres seguros e transforma `SEM_OBS` em vazio.
+5. POST com `nomeCliente`, `contato`, `observacao`; `Idempotency-Key: one-{{user_ns}}-{{<sorteio>}}`.
+6. O resultado manda enviar a confirmação com código, local e descrição, data com dia da semana, horário, pessoas,
+   nome, telefone e observação.
+7. O site grava `observacao` (uma linha, até 300 caracteres; migração `0005`) e a mostra na lista de reservas e no
+   detalhe do mapa. O `/contexto` troca `{{data_hora_atual}}` pela data e hora do fuso do negócio. **Os dois só
+   valem no site depois de publicar**; antes disso o site ignora a observação.
+
+Provado em sandbox: conversa até o resumo (sem confirmar) e o workflow com data inválida (o site leu o corpo e a
+chave; nenhuma reserva criada). Falta a prova de uma reserva real de ponta a ponta.
+
+Limite conhecido: com o site novo, nome acima de 80, contato acima de 40 ou observação acima de 300
+caracteres dão 400; o resultado de falha não mostra o motivo ao agente e a equipe não é avisada.
 
 ## Pendente
 
-- Cadastrar o conhecimento e testar a busca; testar disponibilidade e reserva em empresa com mesas.
+- Cadastrar o conhecimento e testar a busca; testar a reserva (grava de verdade na empresa).
 - Repetir a montagem nos canais das outras empresas.

@@ -179,6 +179,7 @@ pub trait Repositorio: Send + Sync {
         dados: Reserva,
         nome_cliente: Option<String>,
         contato: Option<String>,
+        observacao: Option<String>,
     ) -> impl Future<Output = Muda> + Send;
     /// ATÔMICA: marca cancelada.
     fn reserva_cancelar(

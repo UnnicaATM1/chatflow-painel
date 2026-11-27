@@ -139,7 +139,7 @@ test('SQLite: a migração 0002 preserva os dados e permite mesa_id nulo', async
   assert.equal(r.pessoas, 2);
   const verifica = new DatabaseSync(caminho);
   abertos.push(verifica);
-  assert.equal(verifica.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.equal(verifica.prepare('PRAGMA user_version').get().user_version, 5);
   assert.equal(verifica.prepare('SELECT COUNT(*) AS n FROM reservas_codigos').get().n, 1);
   verifica.exec("UPDATE reservas SET mesa_id = NULL WHERE codigo = '22222222'"); verifica.exec("DELETE FROM reservas WHERE codigo = '22222222'");
   assert.throws(() => verifica.exec(`INSERT INTO reservas (id, empresa_id, codigo, mesa_id, ambiente, data, horario, pessoas, inicio, fim, status)

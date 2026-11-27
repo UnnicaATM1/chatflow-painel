@@ -158,6 +158,7 @@ pub struct Reserva {
     pub status: String,
     pub nome_cliente: Option<String>,
     pub contato: Option<String>,
+    pub observacao: Option<String>,
 }
 
 /// Usuário com login próprio. `senha_hash`, `salt` e `iteracoes` nunca saem pela API.
